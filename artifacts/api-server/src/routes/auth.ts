@@ -286,7 +286,7 @@ router.post("/auth/google", async (req, res) => {
 router.post("/auth/register", async (req, res) => {
   const { firstName, lastName, username, email, password, referralCode, phone, preferredLanguage } = req.body;
 
-  if (!firstName || !lastName || !username || !email || !password || !referralCode) {
+  if (!firstName || !lastName || !username || !email || !password || !referralCode || !phone) {
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
     return;
   }

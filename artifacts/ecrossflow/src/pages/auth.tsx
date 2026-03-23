@@ -334,11 +334,11 @@ export default function AuthPage() {
 
               <form onSubmit={handleGoogleNewUserSubmit} className="space-y-5">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-foreground ml-1">Téléphone (optionnel)</label>
+                  <label className="text-sm font-medium text-foreground ml-1">Téléphone</label>
                   <div className="relative">
                     <Phone className="absolute left-3.5 top-3.5 w-5 h-5 text-muted-foreground" />
                     <input
-                      type="tel" autoComplete="tel"
+                      required type="tel" autoComplete="tel"
                       className="w-full bg-card border border-border rounded-xl py-3 pl-11 pr-4 focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all"
                       placeholder="+1 234 567 8900"
                       value={formData.phone} onChange={e => setFormData({ ...formData, phone: e.target.value })}
@@ -480,11 +480,11 @@ export default function AuthPage() {
 
                 {!isLogin && (
                   <div className="space-y-2">
-                    <label className="text-sm font-medium text-foreground ml-1">Téléphone <span className="text-muted-foreground font-normal">(optionnel)</span></label>
+                    <label className="text-sm font-medium text-foreground ml-1">Téléphone</label>
                     <div className="relative">
                       <Phone className="absolute left-3.5 top-3.5 w-5 h-5 text-muted-foreground" />
                       <input 
-                        type="tel" autoComplete="tel"
+                        required type="tel" autoComplete="tel"
                         className="w-full bg-card border border-border rounded-xl py-3 pl-11 pr-4 focus:ring-2 focus:ring-primary/50 focus:border-primary outline-none transition-all"
                         placeholder="+1 234 567 8900"
                         value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})}
