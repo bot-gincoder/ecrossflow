@@ -45,6 +45,19 @@ Ecrossflow is a pyramid-based community donation platform ("plateforme numériqu
 
 ### Multi-language Support
 - French (fr), English (en), Spanish (es), Haitian Creole (ht)
+- Full i18n dictionary in `use-store.ts` covering: nav, wallet, dashboard, boards, auth, verify, onboarding, history, referrals, notifications, profile, common
+
+### Fonts
+- Display font: Clash Display (via Fontshare CDN)
+- Body font: DM Sans (Google Fonts)
+- Mono font: JetBrains Mono
+
+### Auth Flow
+1. Register with referral code → POST /api/auth/register
+2. OTP sent automatically → redirect to /auth/verify-email?email=...
+3. Enter 6-digit OTP → POST /api/auth/verify-email (account activated)
+4. 4-step onboarding wizard → /onboarding (language → theme → profile → referral code)
+5. Dashboard → /dashboard
 
 ### 4 Themes
 - Light, Dark, Midnight, Gold (via CSS custom properties + class on `<html>`)
@@ -56,7 +69,7 @@ Ecrossflow is a pyramid-based community donation platform ("plateforme numériqu
 
 ## Admin Account
 - Email: admin@ecrossflow.com
-- Password: Admin@123456
+- Password: AdminPass2024! (reset via DB, ADMIN_SEED_PASSWORD env var needed to re-seed)
 - Referral Code: ECFADMIN0
 
 ## Database Schema
@@ -76,6 +89,9 @@ All routes prefixed with `/api`
 - POST `/api/auth/logout` — Logout
 - GET `/api/auth/verify-referral?code=` — Validate referral code
 - GET `/api/auth/check-username?username=` — Check username availability
+- POST `/api/auth/send-otp` — Send email OTP (after registration, logged to console)
+- POST `/api/auth/resend-otp` — Resend OTP code
+- POST `/api/auth/verify-email` — Verify OTP code, activates user account
 
 ### Users
 - GET `/api/users/me` — Get profile

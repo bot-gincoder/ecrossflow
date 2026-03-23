@@ -5,6 +5,26 @@ import { usersTable, walletsTable, referralsTable, notificationsTable } from "@w
 import { eq, or } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
+interface OtpEntry {
+  otp: string;
+  userId: string;
+  expiresAt: number;
+  attempts: number;
+}
+
+const otpStore = new Map<string, OtpEntry>();
+
+function generateOtp(): string {
+  return Math.floor(100000 + Math.random() * 900000).toString();
+}
+
+function cleanOtpStore() {
+  const now = Date.now();
+  for (const [key, entry] of otpStore.entries()) {
+    if (entry.expiresAt < now) otpStore.delete(key);
+  }
+}
+
 const router: IRouter = Router();
 
 function generateReferralCode(): string {
@@ -230,6 +250,120 @@ router.post("/auth/login", async (req, res) => {
 
 router.post("/auth/logout", requireAuth as never, (req, res) => {
   res.json({ message: "Logged out successfully" });
+});
+
+router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
+  const authReq = req as AuthRequest;
+  cleanOtpStore();
+
+  if (!authReq.userId) {
+    res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+    return;
+  }
+
+  const users = await db.select({ id: usersTable.id, email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.id, authReq.userId))
+    .limit(1);
+
+  if (!users.length) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
+    return;
+  }
+
+  const { email } = users[0];
+  const otp = generateOtp();
+  const key = `otp:${email}`;
+
+  otpStore.set(key, {
+    otp,
+    userId: authReq.userId,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    attempts: 0,
+  });
+
+  console.log(`[OTP] Code for ${email}: ${otp}`);
+
+  res.json({ message: "OTP sent", email });
+});
+
+router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
+  const authReq = req as AuthRequest;
+  cleanOtpStore();
+
+  if (!authReq.userId) {
+    res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+    return;
+  }
+
+  const { email } = req.body as { email?: string };
+  if (!email) {
+    res.status(400).json({ error: "Bad Request", message: "Email required" });
+    return;
+  }
+
+  const otp = generateOtp();
+  const key = `otp:${email}`;
+
+  otpStore.set(key, {
+    otp,
+    userId: authReq.userId,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+    attempts: 0,
+  });
+
+  console.log(`[OTP] Resend code for ${email}: ${otp}`);
+  res.json({ message: "OTP resent", email });
+});
+
+router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
+  const authReq = req as AuthRequest;
+
+  if (!authReq.userId) {
+    res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+    return;
+  }
+
+  const { email, otp } = req.body as { email?: string; otp?: string };
+
+  if (!email || !otp) {
+    res.status(400).json({ error: "Bad Request", message: "Email and OTP required" });
+    return;
+  }
+
+  const key = `otp:${email}`;
+  const entry = otpStore.get(key);
+
+  if (!entry) {
+    res.status(400).json({ error: "Bad Request", message: "No OTP found. Please request a new one." });
+    return;
+  }
+
+  if (Date.now() > entry.expiresAt) {
+    otpStore.delete(key);
+    res.status(400).json({ error: "Bad Request", message: "OTP expired. Please request a new one." });
+    return;
+  }
+
+  entry.attempts++;
+  if (entry.attempts > 5) {
+    otpStore.delete(key);
+    res.status(429).json({ error: "Too Many Requests", message: "Too many attempts. Please request a new OTP." });
+    return;
+  }
+
+  if (entry.otp !== otp) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid OTP code." });
+    return;
+  }
+
+  otpStore.delete(key);
+
+  await db.update(usersTable)
+    .set({ status: "ACTIVE", activatedAt: new Date() })
+    .where(eq(usersTable.id, authReq.userId));
+
+  res.json({ message: "Email verified successfully" });
 });
 
 export default router;

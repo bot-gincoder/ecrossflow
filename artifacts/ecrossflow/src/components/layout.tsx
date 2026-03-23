@@ -80,10 +80,10 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   }
 
   const links = requireAdmin ? [
-    { href: '/admin', icon: BarChart, label: 'Stats Overview' },
-    { href: '/admin/users', icon: Users, label: 'User Management' },
-    { href: '/admin/payments', icon: CreditCard, label: 'Pending Deposits' },
-    { href: '/dashboard', icon: LayoutDashboard, label: 'Exit Admin' },
+    { href: '/admin', icon: BarChart, label: 'Vue globale' },
+    { href: '/admin?tab=users', icon: Users, label: 'Utilisateurs' },
+    { href: '/admin?tab=deposits', icon: CreditCard, label: 'Dépôts en attente' },
+    { href: '/dashboard', icon: LayoutDashboard, label: 'Quitter Admin' },
   ] : [
     { href: '/dashboard', icon: LayoutDashboard, label: t('nav.dashboard') },
     { href: '/wallet', icon: Wallet, label: t('nav.wallet') },

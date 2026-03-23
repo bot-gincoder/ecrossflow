@@ -33,15 +33,21 @@ async function seed() {
   const existing = await db.select().from(usersTable).where(eq(usersTable.role, "ADMIN")).limit(1);
 
   if (!existing.length) {
+    const adminPassword = process.env.ADMIN_SEED_PASSWORD;
+    if (!adminPassword) {
+      throw new Error("ADMIN_SEED_PASSWORD environment variable must be set to create the admin account");
+    }
     console.log("Creating admin user...");
-    const passwordHash = await bcrypt.hash("Admin@123456", 12);
+    const passwordHash = await bcrypt.hash(adminPassword, 12);
+    const adminEmail = process.env.ADMIN_SEED_EMAIL || "admin@ecrossflow.com";
+    const adminReferralCode = process.env.ADMIN_SEED_REFERRAL_CODE || "ECFADMIN0";
     const [admin] = await db.insert(usersTable).values({
       firstName: "Admin",
       lastName: "Ecrossflow",
       username: "admin",
-      email: "admin@ecrossflow.com",
+      email: adminEmail,
       passwordHash,
-      referralCode: "ECFADMIN0",
+      referralCode: adminReferralCode,
       status: "ACTIVE",
       role: "ADMIN",
       currentBoard: "F",
@@ -64,8 +70,8 @@ async function seed() {
       totalCollected: "0",
     });
 
-    console.log("Admin created: admin@ecrossflow.com / Admin@123456");
-    console.log("Admin referral code: ECFADMIN0");
+    console.log(`Admin created: ${adminEmail}`);
+    console.log(`Admin referral code: ${adminReferralCode}`);
   } else {
     console.log("Admin already exists, seeding board instances if missing...");
     const adminId = existing[0].id;

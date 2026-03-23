@@ -8,6 +8,8 @@ import { useAppStore } from "@/hooks/use-store";
 
 import Landing from "@/pages/landing";
 import AuthPage from "@/pages/auth";
+import VerifyEmailPage from "@/pages/verify-email";
+import OnboardingPage from "@/pages/onboarding";
 import Dashboard from "@/pages/dashboard";
 import Boards from "@/pages/boards";
 import WalletPage from "@/pages/wallet";
@@ -56,6 +58,8 @@ function Router() {
       <Route path="/" component={Landing} />
       <Route path="/auth/login" component={AuthPage} />
       <Route path="/auth/register" component={AuthPage} />
+      <Route path="/auth/verify-email" component={VerifyEmailPage} />
+      <Route path="/onboarding" component={OnboardingPage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/boards" component={Boards} />
       <Route path="/wallet" component={WalletPage} />

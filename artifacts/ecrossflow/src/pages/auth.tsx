@@ -25,9 +25,18 @@ export default function AuthPage() {
 
   const { mutate: register, isPending: isRegisterPending, error: registerError } = useRegister({
     mutation: {
-      onSuccess: (data) => {
+      onSuccess: async (data) => {
         setToken(data.token);
-        setLocation('/dashboard');
+        try {
+          const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+          await fetch(`${base}/api/auth/send-otp`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${data.token}` },
+          });
+        } catch {
+          // OTP send is best-effort
+        }
+        setLocation(`/auth/verify-email?email=${encodeURIComponent(data.user.email)}`);
       }
     }
   });

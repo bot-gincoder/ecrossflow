@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import { useSearch } from 'wouter';
 import { Users, DollarSign, Activity, CheckCircle, XCircle, Loader2, Search, BarChart3, ShieldAlert, LucideIcon } from 'lucide-react';
 import { useGetAdminStats, useGetAdminUsers, useGetPendingDeposits, useApproveDeposit, useRejectDeposit, useActivateUser, useSuspendUser } from '@workspace/api-client-react';
 import type { AdminUser, AdminDeposit } from '@workspace/api-client-react';
@@ -9,11 +10,20 @@ import { useQueryClient } from '@tanstack/react-query';
 type AdminTab = 'overview' | 'users' | 'deposits';
 
 export default function AdminPage() {
-  const [tab, setTab] = useState<AdminTab>('overview');
+  const searchString = useSearch();
+  const params = new URLSearchParams(searchString);
+  const tabParam = params.get('tab');
+  const initialTab: AdminTab = (tabParam === 'users' || tabParam === 'deposits') ? tabParam : 'overview';
+  const [tab, setTab] = useState<AdminTab>(initialTab);
   const [search, setSearch] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const newTab: AdminTab = (tabParam === 'users' || tabParam === 'deposits') ? tabParam : 'overview';
+    setTab(newTab);
+  }, [tabParam]);
 
   const { data: stats } = useGetAdminStats();
   const { data: usersData } = useGetAdminUsers({ search: search || undefined });
