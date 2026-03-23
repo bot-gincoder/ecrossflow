@@ -10,7 +10,7 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { eq, and, desc, asc } from "drizzle-orm";
-import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 

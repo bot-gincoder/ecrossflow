@@ -2,9 +2,15 @@ import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { walletsTable, transactionsTable, usersTable, notificationsTable } from "@workspace/db";
 import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
-import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
+
+type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
 const router: IRouter = Router();
+
+const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT"]);
+const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
+const SUPPORTED_WITHDRAW_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"]);
 
 const FIXED_RATES: Record<string, number> = {
   USD: 1,
@@ -16,6 +22,12 @@ const FIXED_RATES: Record<string, number> = {
   ETH: 0.00044,
   USDT: 1,
 };
+
+function parsePositiveAmount(value: unknown): number | null {
+  const num = typeof value === "string" ? parseFloat(value) : typeof value === "number" ? value : NaN;
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return num;
+}
 
 router.get("/wallet", requireAuth as never, async (req: AuthRequest, res) => {
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
@@ -57,22 +69,37 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     return;
   }
 
-  const amountNum = parseFloat(amount);
-  const rate = FIXED_RATES[currency] || 1;
+  if (!SUPPORTED_CURRENCIES.has(String(currency))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
+    return;
+  }
+
+  if (!SUPPORTED_DEPOSIT_METHODS.has(String(paymentMethod))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
+    return;
+  }
+
+  const amountNum = parsePositiveAmount(amount);
+  if (amountNum === null) {
+    res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
+    return;
+  }
+
+  const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
 
-  const status = ["MONCASH", "NATCASH", "BANK_TRANSFER"].includes(paymentMethod) ? "PENDING" : "PROCESSING";
+  const status = ["MONCASH", "NATCASH", "BANK_TRANSFER"].includes(String(paymentMethod)) ? "PENDING" : "PROCESSING";
 
   const [tx] = await db.insert(transactionsTable).values({
     userId: req.userId!,
     type: "DEPOSIT",
     amount: amountNum.toFixed(2),
-    currency,
+    currency: String(currency),
     amountUsd: amountUsd.toFixed(2),
     status,
-    paymentMethod,
-    referenceId: reference || null,
-    description: notes || `Deposit via ${paymentMethod}`,
+    paymentMethod: String(paymentMethod) as PaymentMethodValue,
+    referenceId: reference ? String(reference) : null,
+    description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
   }).returning();
 
   if (status === "PROCESSING") {
@@ -121,17 +148,38 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     return;
   }
 
-  const amountNum = parseFloat(amount);
-  const rate = FIXED_RATES[currency] || 1;
+  if (!SUPPORTED_CURRENCIES.has(String(currency))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
+    return;
+  }
+
+  if (!SUPPORTED_WITHDRAW_METHODS.has(String(paymentMethod))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
+    return;
+  }
+
+  const amountNum = parsePositiveAmount(amount);
+  if (amountNum === null) {
+    res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
+    return;
+  }
+
+  const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
 
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
-  if (!wallets.length || parseFloat(wallets[0].balanceUsd) < amountUsd) {
+  if (!wallets.length) {
+    res.status(400).json({ error: "Bad Request", message: "Wallet not found" });
+    return;
+  }
+
+  const currentBalance = parseFloat(wallets[0].balanceUsd);
+  if (currentBalance < amountUsd) {
     res.status(400).json({ error: "Bad Request", message: "Insufficient funds" });
     return;
   }
 
-  const newBalance = parseFloat(wallets[0].balanceUsd) - amountUsd;
+  const newBalance = currentBalance - amountUsd;
   await db.update(walletsTable)
     .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
     .where(eq(walletsTable.userId, req.userId!));
@@ -140,11 +188,11 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     userId: req.userId!,
     type: "WITHDRAWAL",
     amount: amountNum.toFixed(2),
-    currency,
+    currency: String(currency),
     amountUsd: amountUsd.toFixed(2),
     status: "PROCESSING",
-    paymentMethod,
-    description: `Withdrawal to ${destination}`,
+    paymentMethod: String(paymentMethod) as PaymentMethodValue,
+    description: `Withdrawal to ${String(destination)}`,
   }).returning();
 
   await db.insert(notificationsTable).values({
@@ -181,9 +229,19 @@ router.post("/wallet/convert", requireAuth as never, async (req: AuthRequest, re
     return;
   }
 
-  const fromRate = FIXED_RATES[fromCurrency] || 1;
-  const toRate = FIXED_RATES[toCurrency] || 1;
-  const amountNum = parseFloat(amount);
+  if (!SUPPORTED_CURRENCIES.has(String(fromCurrency)) || !SUPPORTED_CURRENCIES.has(String(toCurrency))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
+    return;
+  }
+
+  const amountNum = parsePositiveAmount(amount);
+  if (amountNum === null) {
+    res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
+    return;
+  }
+
+  const fromRate = FIXED_RATES[String(fromCurrency)] ?? 1;
+  const toRate = FIXED_RATES[String(toCurrency)] ?? 1;
   const amountUsd = amountNum / fromRate;
   const fee = amountUsd * 0.01;
   const convertedAmount = (amountUsd - fee) * toRate;

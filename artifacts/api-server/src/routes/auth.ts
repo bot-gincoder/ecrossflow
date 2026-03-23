@@ -301,12 +301,17 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const { email } = req.body as { email?: string };
-  if (!email) {
-    res.status(400).json({ error: "Bad Request", message: "Email required" });
+  const users = await db.select({ id: usersTable.id, email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.id, authReq.userId))
+    .limit(1);
+
+  if (!users.length) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
     return;
   }
 
+  const { email } = users[0];
   const otp = generateOtp();
   const key = `otp:${email}`;
 
@@ -329,18 +334,33 @@ router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const { email, otp } = req.body as { email?: string; otp?: string };
+  const users = await db.select({ id: usersTable.id, email: usersTable.email })
+    .from(usersTable)
+    .where(eq(usersTable.id, authReq.userId))
+    .limit(1);
 
-  if (!email || !otp) {
-    res.status(400).json({ error: "Bad Request", message: "Email and OTP required" });
+  if (!users.length) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
     return;
   }
 
+  const { otp } = req.body as { otp?: string };
+  if (!otp) {
+    res.status(400).json({ error: "Bad Request", message: "OTP required" });
+    return;
+  }
+
+  const email = users[0].email;
   const key = `otp:${email}`;
   const entry = otpStore.get(key);
 
   if (!entry) {
     res.status(400).json({ error: "Bad Request", message: "No OTP found. Please request a new one." });
+    return;
+  }
+
+  if (entry.userId !== authReq.userId) {
+    res.status(403).json({ error: "Forbidden", message: "OTP does not belong to this account." });
     return;
   }
 

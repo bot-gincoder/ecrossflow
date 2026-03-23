@@ -83,7 +83,7 @@ export default function VerifyEmailPage() {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ email, otp }),
+        body: JSON.stringify({ otp }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
