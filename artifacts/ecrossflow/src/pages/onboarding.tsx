@@ -53,7 +53,7 @@ export default function OnboardingPage() {
     setLoading(true);
     try {
       const base = import.meta.env.BASE_URL.replace(/\/$/, "");
-      await fetch(`${base}/api/users/preferences`, {
+      const res = await fetch(`${base}/api/users/preferences`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -65,10 +65,15 @@ export default function OnboardingPage() {
           phone: phone || undefined,
         }),
       });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({})) as { message?: string };
+        toast({ title: t("common.error"), description: data.message || t("common.error"), variant: "destructive" });
+        return;
+      }
       toast({ title: t("onboarding.finish"), description: "Configuration enregistrée." });
       navigate("/dashboard");
     } catch {
-      toast({ title: t("common.error"), variant: "destructive" });
+      toast({ title: t("common.error"), description: "Erreur réseau. Réessayez.", variant: "destructive" });
     } finally {
       setLoading(false);
     }

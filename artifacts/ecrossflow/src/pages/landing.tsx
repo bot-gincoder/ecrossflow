@@ -142,6 +142,58 @@ export default function Landing() {
         </div>
       </section>
 
+      {/* How It Works */}
+      <section id="how-it-works" className="py-24 bg-card/20 relative">
+        <div className="max-w-7xl mx-auto px-6">
+          <div className="text-center mb-16">
+            <span className="text-primary font-semibold text-sm uppercase tracking-wider mb-3 block">{t('nav.how_it_works')}</span>
+            <h2 className="text-3xl lg:text-4xl font-display font-bold mb-4">{language === 'fr' ? '3 étapes pour commencer' : language === 'es' ? '3 pasos para empezar' : language === 'ht' ? '3 etap pou kòmanse' : '3 Steps to Get Started'}</h2>
+            <p className="text-muted-foreground max-w-xl mx-auto">{language === 'fr' ? 'Un processus simple et transparent pour rejoindre la communauté.' : language === 'es' ? 'Un proceso simple y transparente para unirse a la comunidad.' : language === 'ht' ? 'Yon pwosesis senp ak transparan pou rantre nan kominote a.' : 'A simple, transparent process to join the community.'}</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-10 relative">
+            <div className="hidden md:block absolute top-10 left-[calc(33%+2rem)] right-[calc(33%+2rem)] h-px bg-gradient-to-r from-primary/0 via-primary/50 to-primary/0" />
+            {[
+              {
+                step: '01',
+                icon: '🔑',
+                title: language === 'fr' ? "S'inscrire" : language === 'es' ? 'Regístrate' : language === 'ht' ? 'Enskri' : 'Register',
+                desc: language === 'fr' ? "Créez un compte avec un code de parrainage obligatoire. Vérifiez votre email en 60 secondes." : language === 'es' ? 'Crea una cuenta con un código de referido obligatorio. Verifica tu email en 60 segundos.' : language === 'ht' ? 'Kreye yon kont ak yon kòd parenn obligatwa. Verifye imèl ou nan 60 segonn.' : 'Create an account with a mandatory referral code. Verify your email in 60 seconds.',
+              },
+              {
+                step: '02',
+                icon: '💳',
+                title: language === 'fr' ? 'Rejoindre un board' : language === 'es' ? 'Unirse a un tablero' : language === 'ht' ? 'Rantre nan yon bòd' : 'Join a Board',
+                desc: language === 'fr' ? "Effectuez votre premier don de $2 (Board F). Invitez 8 membres pour compléter votre ligne et débloquer votre gain de $16." : language === 'es' ? 'Haz tu primera donación de $2 (Tablero F). Invita 8 miembros para completar tu fila y desbloquear tu ganancia de $16.' : language === 'ht' ? 'Fè premye don ou $2 (Bòd F). Envite 8 manm pou konplete liy ou epi debloke $16.' : 'Make your first $2 donation (Board F). Invite 8 members to complete your row and unlock your $16 gain.',
+              },
+              {
+                step: '03',
+                icon: '🚀',
+                title: language === 'fr' ? 'Progresser automatiquement' : language === 'es' ? 'Progresar automáticamente' : language === 'ht' ? 'Avanse otomatikman' : 'Progress Automatically',
+                desc: language === 'fr' ? "Quand votre board est complet, vous montez automatiquement au prochain niveau (Board E: $8, gain $64) et ainsi de suite jusqu'au Board S." : language === 'es' ? 'Cuando tu tablero está completo, subes automáticamente al siguiente nivel (Tablero E: $8, ganancia $64) y así sucesivamente hasta el Tablero S.' : language === 'ht' ? "Lè bòd ou konplete, ou monte otomatikman nan pwochèn nivo a (Bòd E: $8, gen $64) konsa jis Bòd S." : "When your board completes, you automatically advance to the next level (Board E: $8, gain $64) all the way to Board S.",
+              },
+            ].map((item) => (
+              <motion.div
+                key={item.step}
+                initial={{ opacity: 0, y: 30 }}
+                whileInView={{ opacity: 1, y: 0 }}
+                viewport={{ once: true }}
+                transition={{ duration: 0.5 }}
+                className="flex flex-col items-center text-center relative"
+              >
+                <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-primary/20 to-accent/20 border border-primary/20 flex items-center justify-center text-3xl mb-6 shadow-lg">
+                  {item.icon}
+                </div>
+                <div className="absolute top-0 right-0 w-7 h-7 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center -mt-1 mr-8 md:mr-0 md:right-auto md:left-[calc(50%+2rem)]">
+                  {item.step}
+                </div>
+                <h3 className="text-xl font-display font-bold mb-3">{item.title}</h3>
+                <p className="text-muted-foreground text-sm leading-relaxed max-w-xs">{item.desc}</p>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      </section>
+
       {/* Boards Preview */}
       <section id="boards" className="py-24 relative">
         <div className="max-w-7xl mx-auto px-6">

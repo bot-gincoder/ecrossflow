@@ -4,6 +4,7 @@ import { db } from "@workspace/db";
 import { usersTable, walletsTable, referralsTable, notificationsTable } from "@workspace/db";
 import { eq, or } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { sendEmail, buildOtpEmail } from "../services/email.js";
 
 interface OtpEntry {
   otp: string;
@@ -299,7 +300,9 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
     attempts: 0,
   });
 
-  console.log(`[OTP] Verification code sent for ${email}`);
+  await sendEmail(buildOtpEmail(otp, email)).catch(() => {
+    console.warn(`[OTP] Email delivery failed for ${email}`);
+  });
 
   res.json({ message: "OTP sent", email });
 });
@@ -334,7 +337,10 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
     attempts: 0,
   });
 
-  console.log(`[OTP] Verification code resent for ${email}`);
+  await sendEmail(buildOtpEmail(otp, email)).catch(() => {
+    console.warn(`[OTP] Email delivery failed for ${email}`);
+  });
+
   res.json({ message: "OTP resent", email });
 });
 
