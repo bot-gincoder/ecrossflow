@@ -44,13 +44,19 @@ function RedirectTo({ to }: { to: string }) {
 }
 
 function AppSetup({ children }: { children: React.ReactNode }) {
-  const { token, theme } = useAppStore();
+  const { theme } = useAppStore();
 
   useEffect(() => {
     const apiUrl = `${window.location.origin}`;
     setBaseUrl(apiUrl);
-    setAuthTokenGetter(() => token || "");
-  }, [token]);
+    setAuthTokenGetter(() => {
+      return (
+        localStorage.getItem('ecrossflow_token') ||
+        useAppStore.getState().token ||
+        ''
+      );
+    });
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
