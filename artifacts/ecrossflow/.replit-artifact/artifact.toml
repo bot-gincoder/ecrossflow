@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Ecrossflow"
+version = "1.0.0"
+id = "artifacts/ecrossflow"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 21767
+
+[services.development]
+run = "pnpm --filter @workspace/ecrossflow run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/ecrossflow", "run", "build" ]
+publicDir = "artifacts/ecrossflow/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "21767"
+BASE_PATH = "/"

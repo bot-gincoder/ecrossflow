@@ -3,13 +3,30 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Ecrossflow API specification
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: users
+    description: User management
+  - name: boards
+    description: Board system operations
+  - name: wallet
+    description: Virtual wallet operations
+  - name: transactions
+    description: Transaction history
+  - name: referrals
+    description: Referral program
+  - name: notifications
+    description: Notification system
+  - name: admin
+    description: Admin operations
+
 paths:
   /healthz:
     get:
@@ -24,7 +41,726 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  # AUTH ENDPOINTS
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: User already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login with email/username and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout and invalidate session
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /auth/verify-referral:
+    get:
+      operationId: verifyReferral
+      tags: [auth]
+      summary: Verify a referral code and get referrer info
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Referral code info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferralVerifyResponse"
+        "404":
+          description: Code not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/check-username:
+    get:
+      operationId: checkUsername
+      tags: [auth]
+      summary: Check if username is available
+      parameters:
+        - name: username
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Username availability
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsernameCheckResponse"
+
+  # USER ENDPOINTS
+  /users/me:
+    get:
+      operationId: getMe
+      tags: [users]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    put:
+      operationId: updateMe
+      tags: [users]
+      summary: Update current user profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateProfileRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  /users/me/settings:
+    put:
+      operationId: updateSettings
+      tags: [users]
+      summary: Update user settings (theme, language, currency)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSettingsRequest"
+      responses:
+        "200":
+          description: Updated settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+
+  # BOARDS ENDPOINTS
+  /boards:
+    get:
+      operationId: getBoards
+      tags: [boards]
+      summary: Get all boards configuration
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of boards
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  boards:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Board"
+                required:
+                  - boards
+
+  /boards/{boardId}/instance:
+    get:
+      operationId: getBoardInstance
+      tags: [boards]
+      summary: Get active instance for a board
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active board instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoardInstance"
+        "404":
+          description: No active instance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /boards/{boardId}/pay:
+    post:
+      operationId: payBoard
+      tags: [boards]
+      summary: Pay to join a board
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: boardId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Payment processed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BoardPaymentResponse"
+        "400":
+          description: Insufficient funds or ineligible
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /boards/my-status:
+    get:
+      operationId: getMyBoardStatus
+      tags: [boards]
+      summary: Get user's status across all boards
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Board statuses
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  statuses:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/UserBoardStatus"
+                required:
+                  - statuses
+
+  # WALLET ENDPOINTS
+  /wallet:
+    get:
+      operationId: getWallet
+      tags: [wallet]
+      summary: Get wallet balance
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Wallet balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletBalance"
+
+  /wallet/deposit:
+    post:
+      operationId: createDeposit
+      tags: [wallet]
+      summary: Create a deposit request
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepositRequest"
+      responses:
+        "201":
+          description: Deposit created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /wallet/withdraw:
+    post:
+      operationId: createWithdrawal
+      tags: [wallet]
+      summary: Create a withdrawal request
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WithdrawalRequest"
+      responses:
+        "201":
+          description: Withdrawal created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+        "400":
+          description: Insufficient funds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /wallet/convert:
+    post:
+      operationId: convertCurrency
+      tags: [wallet]
+      summary: Convert between currencies
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConvertRequest"
+      responses:
+        "200":
+          description: Conversion done
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConvertResponse"
+
+  /wallet/rates:
+    get:
+      operationId: getExchangeRates
+      tags: [wallet]
+      summary: Get current exchange rates
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Exchange rates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExchangeRates"
+
+  # TRANSACTIONS ENDPOINTS
+  /transactions:
+    get:
+      operationId: getTransactions
+      tags: [transactions]
+      summary: Get transaction history with filters
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: dateFrom
+          in: query
+          schema:
+            type: string
+        - name: dateTo
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transaction list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionListResponse"
+
+  /transactions/report:
+    get:
+      operationId: getTransactionReport
+      tags: [transactions]
+      summary: Get detailed financial report
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Financial report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FinancialReport"
+
+  # REFERRALS ENDPOINTS
+  /referrals:
+    get:
+      operationId: getReferrals
+      tags: [referrals]
+      summary: Get referral info and list of referrals
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Referral data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferralData"
+
+  # NOTIFICATIONS ENDPOINTS
+  /notifications:
+    get:
+      operationId: getNotifications
+      tags: [notifications]
+      summary: Get notifications list
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: filter
+          in: query
+          schema:
+            type: string
+            enum: [all, unread, financial, security]
+      responses:
+        "200":
+          description: Notifications
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationListResponse"
+
+  /notifications/unread-count:
+    get:
+      operationId: getUnreadCount
+      tags: [notifications]
+      summary: Get unread notification count
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Unread count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnreadCountResponse"
+
+  /notifications/{id}/read:
+    put:
+      operationId: markNotificationRead
+      tags: [notifications]
+      summary: Mark notification as read
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /notifications/read-all:
+    put:
+      operationId: markAllNotificationsRead
+      tags: [notifications]
+      summary: Mark all notifications as read
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: All marked as read
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  # ADMIN ENDPOINTS
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Get platform statistics
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Platform stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+
+  /admin/users:
+    get:
+      operationId: getAdminUsers
+      tags: [admin]
+      summary: Get all users (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserListResponse"
+
+  /admin/users/{id}/suspend:
+    put:
+      operationId: suspendUser
+      tags: [admin]
+      summary: Suspend a user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User suspended
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/users/{id}/activate:
+    put:
+      operationId: activateUser
+      tags: [admin]
+      summary: Activate a user
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User activated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/users/{id}/adjust-balance:
+    post:
+      operationId: adjustUserBalance
+      tags: [admin]
+      summary: Manually adjust user balance
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AdjustBalanceRequest"
+      responses:
+        "200":
+          description: Balance adjusted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/deposits/pending:
+    get:
+      operationId: getPendingDeposits
+      tags: [admin]
+      summary: Get pending manual deposits (Moncash/Natcash)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pending deposits
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminDepositListResponse"
+
+  /admin/deposits/{id}/approve:
+    put:
+      operationId: approveDeposit
+      tags: [admin]
+      summary: Approve a pending deposit
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Deposit approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/deposits/{id}/reject:
+    put:
+      operationId: rejectDeposit
+      tags: [admin]
+      summary: Reject a pending deposit
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectDepositRequest"
+      responses:
+        "200":
+          description: Deposit rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
   schemas:
     HealthStatus:
       type: object
@@ -34,3 +770,801 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required:
+        - error
+
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required:
+        - message
+
+    # AUTH SCHEMAS
+    RegisterRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        username:
+          type: string
+          minLength: 3
+          maxLength: 20
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+        password:
+          type: string
+          minLength: 8
+        referralCode:
+          type: string
+        preferredLanguage:
+          type: string
+          default: "fr"
+      required:
+        - firstName
+        - lastName
+        - username
+        - email
+        - password
+        - referralCode
+
+    LoginRequest:
+      type: object
+      properties:
+        emailOrUsername:
+          type: string
+        password:
+          type: string
+        rememberMe:
+          type: boolean
+          default: false
+      required:
+        - emailOrUsername
+        - password
+
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+        user:
+          $ref: "#/components/schemas/UserProfile"
+      required:
+        - token
+        - user
+
+    ReferralVerifyResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        referrerName:
+          type: string
+        referrerUsername:
+          type: string
+      required:
+        - valid
+
+    UsernameCheckResponse:
+      type: object
+      properties:
+        available:
+          type: boolean
+      required:
+        - available
+
+    # USER SCHEMAS
+    UserProfile:
+      type: object
+      properties:
+        id:
+          type: string
+        accountNumber:
+          type: integer
+          nullable: true
+        firstName:
+          type: string
+        lastName:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        avatarUrl:
+          type: string
+          nullable: true
+        referralCode:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, ACTIVE, SUSPENDED]
+        role:
+          type: string
+          enum: [USER, ADMIN]
+        preferredLanguage:
+          type: string
+        preferredCurrency:
+          type: string
+        preferredTheme:
+          type: string
+        currentBoard:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - firstName
+        - lastName
+        - username
+        - email
+        - referralCode
+        - status
+        - role
+        - preferredLanguage
+        - preferredCurrency
+        - preferredTheme
+        - createdAt
+
+    UpdateProfileRequest:
+      type: object
+      properties:
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+
+    UpdateSettingsRequest:
+      type: object
+      properties:
+        preferredLanguage:
+          type: string
+        preferredCurrency:
+          type: string
+        preferredTheme:
+          type: string
+
+    # BOARD SCHEMAS
+    Board:
+      type: object
+      properties:
+        id:
+          type: string
+        rankOrder:
+          type: integer
+        entryFee:
+          type: number
+        multiplier:
+          type: integer
+        totalGain:
+          type: number
+        nextBoardDeduction:
+          type: number
+        withdrawable:
+          type: number
+        description:
+          type: string
+          nullable: true
+        colorTheme:
+          type: string
+          nullable: true
+      required:
+        - id
+        - rankOrder
+        - entryFee
+        - multiplier
+        - totalGain
+        - nextBoardDeduction
+        - withdrawable
+
+    BoardParticipant:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        username:
+          type: string
+        avatarUrl:
+          type: string
+          nullable: true
+        role:
+          type: string
+          enum: [STARTER, CHALLENGER, LEADER, RANKER]
+        position:
+          type: integer
+          nullable: true
+        paidAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - userId
+        - username
+        - role
+
+    BoardInstance:
+      type: object
+      properties:
+        id:
+          type: string
+        boardId:
+          type: string
+        instanceNumber:
+          type: integer
+        ranker:
+          $ref: "#/components/schemas/BoardParticipant"
+        status:
+          type: string
+          enum: [WAITING, ACTIVE, COMPLETED]
+        slotsFilled:
+          type: integer
+        totalCollected:
+          type: number
+        participants:
+          type: array
+          items:
+            $ref: "#/components/schemas/BoardParticipant"
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - boardId
+        - instanceNumber
+        - ranker
+        - status
+        - slotsFilled
+        - totalCollected
+        - participants
+        - createdAt
+
+    BoardPaymentResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        boardCompleted:
+          type: boolean
+        newRole:
+          type: string
+          nullable: true
+      required:
+        - success
+        - message
+        - boardCompleted
+
+    UserBoardStatus:
+      type: object
+      properties:
+        boardId:
+          type: string
+        role:
+          type: string
+          nullable: true
+        instanceId:
+          type: string
+          nullable: true
+        amountPaid:
+          type: number
+          nullable: true
+        joinedAt:
+          type: string
+          format: date-time
+          nullable: true
+        completed:
+          type: boolean
+      required:
+        - boardId
+        - completed
+
+    # WALLET SCHEMAS
+    WalletBalance:
+      type: object
+      properties:
+        balanceUsd:
+          type: number
+        balancePending:
+          type: number
+        balanceReserved:
+          type: number
+        totalBalance:
+          type: number
+      required:
+        - balanceUsd
+        - balancePending
+        - balanceReserved
+        - totalBalance
+
+    DepositRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        currency:
+          type: string
+        paymentMethod:
+          type: string
+          enum: [MONCASH, NATCASH, CARD, BANK_TRANSFER, CRYPTO, PAYPAL]
+        reference:
+          type: string
+        notes:
+          type: string
+      required:
+        - amount
+        - currency
+        - paymentMethod
+
+    WithdrawalRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        currency:
+          type: string
+        paymentMethod:
+          type: string
+          enum: [MONCASH, NATCASH, CARD, BANK_TRANSFER, CRYPTO, PAYPAL]
+        destination:
+          type: string
+      required:
+        - amount
+        - currency
+        - paymentMethod
+        - destination
+
+    ConvertRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        fromCurrency:
+          type: string
+        toCurrency:
+          type: string
+      required:
+        - amount
+        - fromCurrency
+        - toCurrency
+
+    ConvertResponse:
+      type: object
+      properties:
+        convertedAmount:
+          type: number
+        rate:
+          type: number
+        fee:
+          type: number
+      required:
+        - convertedAmount
+        - rate
+        - fee
+
+    ExchangeRates:
+      type: object
+      properties:
+        base:
+          type: string
+        rates:
+          type: object
+          additionalProperties:
+            type: number
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - base
+        - rates
+        - updatedAt
+
+    # TRANSACTION SCHEMAS
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+          enum: [DEPOSIT, WITHDRAWAL, BOARD_PAYMENT, BOARD_RECEIPT, REFERRAL_BONUS, CONVERSION, ACTIVATION_FEE, BOARD_PROMOTION, SYSTEM_FEE]
+        amount:
+          type: number
+        currency:
+          type: string
+        amountUsd:
+          type: number
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED]
+        paymentMethod:
+          type: string
+          nullable: true
+        referenceId:
+          type: string
+          nullable: true
+        fromBoard:
+          type: string
+          nullable: true
+        description:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - type
+        - amount
+        - currency
+        - amountUsd
+        - status
+        - createdAt
+        - updatedAt
+
+    TransactionListResponse:
+      type: object
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - transactions
+        - total
+        - page
+        - totalPages
+
+    FinancialReport:
+      type: object
+      properties:
+        totalDeposited:
+          type: number
+        totalWithdrawn:
+          type: number
+        totalReceived:
+          type: number
+        totalPaid:
+          type: number
+        systemFees:
+          type: number
+        referralBonuses:
+          type: number
+        netProfit:
+          type: number
+        boardProgress:
+          type: array
+          items:
+            type: object
+            properties:
+              boardId:
+                type: string
+              status:
+                type: string
+              completedAt:
+                type: string
+                nullable: true
+              gained:
+                type: number
+              withdrawn:
+                type: number
+              reinvested:
+                type: number
+            required:
+              - boardId
+              - status
+              - gained
+              - withdrawn
+              - reinvested
+      required:
+        - totalDeposited
+        - totalWithdrawn
+        - totalReceived
+        - totalPaid
+        - systemFees
+        - referralBonuses
+        - netProfit
+        - boardProgress
+
+    # REFERRAL SCHEMAS
+    ReferralData:
+      type: object
+      properties:
+        referralCode:
+          type: string
+        referralLink:
+          type: string
+        totalReferrals:
+          type: integer
+        activeReferrals:
+          type: integer
+        pendingReferrals:
+          type: integer
+        totalBonusEarned:
+          type: number
+        referrals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReferralItem"
+      required:
+        - referralCode
+        - referralLink
+        - totalReferrals
+        - activeReferrals
+        - pendingReferrals
+        - totalBonusEarned
+        - referrals
+
+    ReferralItem:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        status:
+          type: string
+        joinedAt:
+          type: string
+          format: date-time
+        bonusPaid:
+          type: boolean
+      required:
+        - id
+        - username
+        - firstName
+        - status
+        - joinedAt
+        - bonusPaid
+
+    # NOTIFICATION SCHEMAS
+    Notification:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        title:
+          type: string
+        message:
+          type: string
+        read:
+          type: boolean
+        category:
+          type: string
+          enum: [financial, security, system, referral]
+        actionUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - type
+        - title
+        - message
+        - read
+        - category
+        - createdAt
+
+    NotificationListResponse:
+      type: object
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: "#/components/schemas/Notification"
+        total:
+          type: integer
+        unreadCount:
+          type: integer
+      required:
+        - notifications
+        - total
+        - unreadCount
+
+    UnreadCountResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+      required:
+        - count
+
+    # ADMIN SCHEMAS
+    AdminStats:
+      type: object
+      properties:
+        totalUsers:
+          type: integer
+        activeUsers:
+          type: integer
+        pendingUsers:
+          type: integer
+        totalVolume24h:
+          type: number
+        totalVolume7d:
+          type: number
+        activeBoards:
+          type: integer
+        pendingDeposits:
+          type: integer
+        pendingWithdrawals:
+          type: integer
+        totalPlatformRevenue:
+          type: number
+      required:
+        - totalUsers
+        - activeUsers
+        - pendingUsers
+        - totalVolume24h
+        - totalVolume7d
+        - activeBoards
+        - pendingDeposits
+        - pendingWithdrawals
+        - totalPlatformRevenue
+
+    AdminUserListResponse:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminUser"
+        total:
+          type: integer
+        page:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - users
+        - total
+        - page
+        - totalPages
+
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: string
+        accountNumber:
+          type: integer
+          nullable: true
+        username:
+          type: string
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        status:
+          type: string
+        role:
+          type: string
+        currentBoard:
+          type: string
+          nullable: true
+        walletBalance:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - username
+        - email
+        - firstName
+        - lastName
+        - status
+        - role
+        - walletBalance
+        - createdAt
+
+    AdjustBalanceRequest:
+      type: object
+      properties:
+        amount:
+          type: number
+        note:
+          type: string
+      required:
+        - amount
+        - note
+
+    AdminDepositListResponse:
+      type: object
+      properties:
+        deposits:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminDeposit"
+        total:
+          type: integer
+      required:
+        - deposits
+        - total
+
+    AdminDeposit:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        username:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        amountHtg:
+          type: number
+          nullable: true
+        paymentMethod:
+          type: string
+        reference:
+          type: string
+          nullable: true
+        screenshotUrl:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - userId
+        - username
+        - amount
+        - currency
+        - paymentMethod
+        - createdAt
+
+    RejectDepositRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+      required:
+        - reason

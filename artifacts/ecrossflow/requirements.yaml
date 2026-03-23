@@ -1,0 +1,23 @@
+packages:
+  "framer-motion": "Page transitions, smooth UI animations, and staggered list reveals"
+  "canvas-confetti": "Board completion celebration effects"
+  "@types/canvas-confetti": "TypeScript definitions for canvas-confetti"
+  "qrcode.react": "Generating QR codes for referral links and crypto deposits"
+  "zustand": "Global state management for theme, language, and auth"
+  "recharts": "Admin dashboard and user financial history charts"
+
+images:
+  - path: "artifacts/ecrossflow/public/images/hero-bg.png"
+    description: "Luxury dark futuristic abstract mesh gradient with glowing emerald green and subtle gold accents, high-end fintech aesthetic"
+    aspect_ratio: "16:9"
+  - path: "artifacts/ecrossflow/public/images/auth-bg.png"
+    description: "Minimalist dark premium texture with subtle geometric lines and a soft emerald light leak from the corner"
+    aspect_ratio: "16:9"
+  - path: "artifacts/ecrossflow/public/images/logo.png"
+    description: "Ecrossflow abstract geometric minimal monogram logo mark, intersecting lines, pure gold and emerald gradient on transparent background"
+    aspect_ratio: "1:1"
+
+notes:
+  - Using monkey-patched window.fetch in App.tsx to inject the Bearer token from localStorage into Orval generated hooks automatically.
+  - Using Zustand for global client-side state (theme, language).
+  - Simulating i18n through a simple dictionary in use-store for demonstration.
