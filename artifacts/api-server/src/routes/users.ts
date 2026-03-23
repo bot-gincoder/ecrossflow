@@ -94,4 +94,38 @@ router.put("/users/me/settings", requireAuth as never, async (req: AuthRequest, 
   });
 });
 
+router.patch("/users/preferences", requireAuth as never, async (req: AuthRequest, res) => {
+  const { preferredLanguage, preferredCurrency, preferredTheme, phone } = req.body as {
+    preferredLanguage?: string;
+    preferredCurrency?: string;
+    preferredTheme?: string;
+    phone?: string;
+  };
+  const updates: Partial<typeof usersTable.$inferInsert> = { updatedAt: new Date() };
+  if (preferredLanguage) updates.preferredLanguage = preferredLanguage;
+  if (preferredCurrency) updates.preferredCurrency = preferredCurrency;
+  if (preferredTheme) updates.preferredTheme = preferredTheme;
+  if (phone !== undefined) updates.phone = phone || null;
+
+  const [updated] = await db.update(usersTable).set(updates).where(eq(usersTable.id, req.userId!)).returning();
+  res.json({
+    id: updated.id,
+    accountNumber: updated.accountNumber,
+    firstName: updated.firstName,
+    lastName: updated.lastName,
+    username: updated.username,
+    email: updated.email,
+    phone: updated.phone,
+    avatarUrl: updated.avatarUrl,
+    referralCode: updated.referralCode,
+    status: updated.status,
+    role: updated.role,
+    preferredLanguage: updated.preferredLanguage,
+    preferredCurrency: updated.preferredCurrency,
+    preferredTheme: updated.preferredTheme,
+    currentBoard: updated.currentBoard,
+    createdAt: updated.createdAt,
+  });
+});
+
 export default router;

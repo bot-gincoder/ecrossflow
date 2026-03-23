@@ -217,6 +217,11 @@ router.post("/auth/login", async (req, res) => {
     return;
   }
 
+  if (user.status === "PENDING") {
+    res.status(403).json({ error: "Forbidden", message: "Email not verified. Please check your inbox for the verification code.", code: "EMAIL_NOT_VERIFIED", email: user.email });
+    return;
+  }
+
   const validPassword = await bcrypt.compare(password, user.passwordHash);
   if (!validPassword) {
     res.status(401).json({ error: "Unauthorized", message: "Invalid credentials" });
@@ -282,7 +287,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
     attempts: 0,
   });
 
-  console.log(`[OTP] Code for ${email}: ${otp}`);
+  console.log(`[OTP] Verification code sent for ${email}`);
 
   res.json({ message: "OTP sent", email });
 });
@@ -312,7 +317,7 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
     attempts: 0,
   });
 
-  console.log(`[OTP] Resend code for ${email}: ${otp}`);
+  console.log(`[OTP] Verification code resent for ${email}`);
   res.json({ message: "OTP resent", email });
 });
 

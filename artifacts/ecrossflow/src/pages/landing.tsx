@@ -1,9 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'wouter';
 import { motion } from 'framer-motion';
-import { ShieldCheck, Zap, Globe, ArrowRight, ChevronRight, PlayCircle } from 'lucide-react';
+import { ShieldCheck, Zap, Globe, ArrowRight, ChevronRight, PlayCircle, ChevronDown } from 'lucide-react';
+import { useAppStore, type Language } from '@/hooks/use-store';
+
+const LANG_OPTIONS: { value: Language; flag: string; label: string }[] = [
+  { value: 'fr', flag: '🇫🇷', label: 'FR' },
+  { value: 'en', flag: '🇬🇧', label: 'EN' },
+  { value: 'es', flag: '🇪🇸', label: 'ES' },
+  { value: 'ht', flag: '🇭🇹', label: 'HT' },
+];
 
 export default function Landing() {
+  const { language, setLanguage, t } = useAppStore();
+  const [langOpen, setLangOpen] = useState(false);
+  const currentLang = LANG_OPTIONS.find(l => l.value === language) || LANG_OPTIONS[0];
+
   return (
     <div className="min-h-screen bg-background text-foreground overflow-hidden selection:bg-primary/30">
       {/* Header */}
@@ -16,14 +28,38 @@ export default function Landing() {
              <span className="font-display font-bold text-xl tracking-tight">ECROSSFLOW</span>
           </div>
           <nav className="hidden md:flex gap-8 text-sm font-medium text-muted-foreground">
-            <a href="#how-it-works" className="hover:text-foreground transition-colors">How it Works</a>
-            <a href="#boards" className="hover:text-foreground transition-colors">The Boards</a>
+            <a href="#how-it-works" className="hover:text-foreground transition-colors">{t('nav.how_it_works')}</a>
+            <a href="#boards" className="hover:text-foreground transition-colors">{t('nav.boards')}</a>
             <a href="#faq" className="hover:text-foreground transition-colors">FAQ</a>
           </nav>
-          <div className="flex items-center gap-4">
-            <Link href="/auth/login" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block">Login</Link>
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <button
+                onClick={() => setLangOpen(o => !o)}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border hover:border-primary/50 text-sm font-medium transition-colors"
+              >
+                <span>{currentLang.flag}</span>
+                <span className="text-muted-foreground">{currentLang.label}</span>
+                <ChevronDown className="w-3 h-3 text-muted-foreground" />
+              </button>
+              {langOpen && (
+                <div className="absolute right-0 top-full mt-1 bg-card border border-border rounded-xl shadow-xl z-50 overflow-hidden">
+                  {LANG_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => { setLanguage(opt.value); setLangOpen(false); }}
+                      className={`flex items-center gap-2 w-full px-4 py-2.5 text-sm hover:bg-muted transition-colors ${language === opt.value ? 'text-primary font-semibold' : 'text-foreground'}`}
+                    >
+                      <span>{opt.flag}</span>
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <Link href="/auth/login" className="text-sm font-medium hover:text-primary transition-colors hidden sm:block">{t('auth.login')}</Link>
             <Link href="/auth/register" className="bg-primary text-primary-foreground px-5 py-2.5 rounded-xl font-semibold hover:shadow-[0_0_20px_rgba(0,255,170,0.4)] transition-all hover:-translate-y-0.5">
-              Get Started
+              {t('auth.register_now')}
             </Link>
           </div>
         </div>
