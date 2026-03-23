@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
-router.get("/notifications", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/notifications", requireAuth as never, async (req: AuthRequest, res) => {
   const { page = "1", filter = "all" } = req.query as { page: string; filter: string };
   const pageNum = parseInt(page);
   const limitNum = 20;
@@ -50,21 +50,22 @@ router.get("/notifications", requireAuth as any, async (req: AuthRequest, res) =
   });
 });
 
-router.get("/notifications/unread-count", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/notifications/unread-count", requireAuth as never, async (req: AuthRequest, res) => {
   const [result] = await db.select({ count: count() })
     .from(notificationsTable)
     .where(and(eq(notificationsTable.userId, req.userId!), eq(notificationsTable.read, false)));
   res.json({ count: Number(result.count) });
 });
 
-router.put("/notifications/:id/read", requireAuth as any, async (req: AuthRequest, res) => {
+router.put("/notifications/:id/read", requireAuth as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
   await db.update(notificationsTable)
     .set({ read: true })
-    .where(and(eq(notificationsTable.id, req.params.id), eq(notificationsTable.userId, req.userId!)));
+    .where(and(eq(notificationsTable.id, id), eq(notificationsTable.userId, req.userId!)));
   res.json({ message: "Notification marked as read" });
 });
 
-router.put("/notifications/read-all", requireAuth as any, async (req: AuthRequest, res) => {
+router.put("/notifications/read-all", requireAuth as never, async (req: AuthRequest, res) => {
   await db.update(notificationsTable)
     .set({ read: true })
     .where(and(eq(notificationsTable.userId, req.userId!), eq(notificationsTable.read, false)));

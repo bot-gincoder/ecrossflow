@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
-router.get("/users/me", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
   const users = await db.select().from(usersTable).where(eq(usersTable.id, req.userId!)).limit(1);
   if (!users.length) {
     res.status(404).json({ error: "Not Found", message: "User not found" });
@@ -33,7 +33,7 @@ router.get("/users/me", requireAuth as any, async (req: AuthRequest, res) => {
   });
 });
 
-router.put("/users/me", requireAuth as any, async (req: AuthRequest, res) => {
+router.put("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
   const { firstName, lastName, phone } = req.body;
   const updates: any = {};
   if (firstName) updates.firstName = firstName;
@@ -62,7 +62,7 @@ router.put("/users/me", requireAuth as any, async (req: AuthRequest, res) => {
   });
 });
 
-router.put("/users/me/settings", requireAuth as any, async (req: AuthRequest, res) => {
+router.put("/users/me/settings", requireAuth as never, async (req: AuthRequest, res) => {
   const { preferredLanguage, preferredCurrency, preferredTheme } = req.body;
   const updates: any = { updatedAt: new Date() };
   if (preferredLanguage) updates.preferredLanguage = preferredLanguage;

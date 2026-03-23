@@ -17,7 +17,7 @@ const FIXED_RATES: Record<string, number> = {
   USDT: 1,
 };
 
-router.get("/wallet", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/wallet", requireAuth as never, async (req: AuthRequest, res) => {
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
   if (!wallets.length) {
     await db.insert(walletsTable).values({
@@ -41,7 +41,7 @@ router.get("/wallet", requireAuth as any, async (req: AuthRequest, res) => {
   });
 });
 
-router.get("/wallet/rates", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/wallet/rates", requireAuth as never, async (req: AuthRequest, res) => {
   res.json({
     base: "USD",
     rates: FIXED_RATES,
@@ -49,7 +49,7 @@ router.get("/wallet/rates", requireAuth as any, async (req: AuthRequest, res) =>
   });
 });
 
-router.post("/wallet/deposit", requireAuth as any, async (req: AuthRequest, res) => {
+router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, res) => {
   const { amount, currency, paymentMethod, reference, notes } = req.body;
 
   if (!amount || !currency || !paymentMethod) {
@@ -113,7 +113,7 @@ router.post("/wallet/deposit", requireAuth as any, async (req: AuthRequest, res)
   });
 });
 
-router.post("/wallet/withdraw", requireAuth as any, async (req: AuthRequest, res) => {
+router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
   const { amount, currency, paymentMethod, destination } = req.body;
 
   if (!amount || !currency || !paymentMethod || !destination) {
@@ -173,7 +173,7 @@ router.post("/wallet/withdraw", requireAuth as any, async (req: AuthRequest, res
   });
 });
 
-router.post("/wallet/convert", requireAuth as any, async (req: AuthRequest, res) => {
+router.post("/wallet/convert", requireAuth as never, async (req: AuthRequest, res) => {
   const { amount, fromCurrency, toCurrency } = req.body;
 
   if (!amount || !fromCurrency || !toCurrency) {

@@ -16,7 +16,7 @@ const router: IRouter = Router();
 
 const BOARD_ORDER = ["F", "E", "D", "C", "B", "A", "S"];
 
-router.get("/boards", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/boards", requireAuth as never, async (req: AuthRequest, res) => {
   const boards = await db.select().from(boardsTable).orderBy(asc(boardsTable.rankOrder));
   res.json({ boards: boards.map(b => ({
     id: b.id,
@@ -31,7 +31,7 @@ router.get("/boards", requireAuth as any, async (req: AuthRequest, res) => {
   }))});
 });
 
-router.get("/boards/my-status", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/boards/my-status", requireAuth as never, async (req: AuthRequest, res) => {
   const boards = await db.select().from(boardsTable).orderBy(asc(boardsTable.rankOrder));
   const statuses = [];
 
@@ -44,8 +44,11 @@ router.get("/boards/my-status", requireAuth as any, async (req: AuthRequest, res
       boardInstanceId: boardParticipantsTable.boardInstanceId,
     })
     .from(boardParticipantsTable)
+    .innerJoin(boardInstancesTable, and(
+      eq(boardParticipantsTable.boardInstanceId, boardInstancesTable.id),
+      eq(boardInstancesTable.boardId, board.id)
+    ))
     .where(eq(boardParticipantsTable.userId, req.userId!))
-    .innerJoin(boardInstancesTable, eq(boardParticipantsTable.boardInstanceId, boardInstancesTable.id))
     .limit(1);
 
     if (!participation.length) {
@@ -66,8 +69,8 @@ router.get("/boards/my-status", requireAuth as any, async (req: AuthRequest, res
   res.json({ statuses });
 });
 
-router.get("/boards/:boardId/instance", requireAuth as any, async (req: AuthRequest, res) => {
-  const { boardId } = req.params;
+router.get("/boards/:boardId/instance", requireAuth as never, async (req: AuthRequest, res) => {
+  const boardId = String(req.params.boardId);
   const instances = await db.select()
     .from(boardInstancesTable)
     .where(and(eq(boardInstancesTable.boardId, boardId), eq(boardInstancesTable.status, "ACTIVE")))
@@ -134,8 +137,8 @@ router.get("/boards/:boardId/instance", requireAuth as any, async (req: AuthRequ
   });
 });
 
-router.post("/boards/:boardId/pay", requireAuth as any, async (req: AuthRequest, res) => {
-  const { boardId } = req.params;
+router.post("/boards/:boardId/pay", requireAuth as never, async (req: AuthRequest, res) => {
+  const boardId = String(req.params.boardId);
 
   const board = await db.select().from(boardsTable).where(eq(boardsTable.id, boardId)).limit(1);
   if (!board.length) {
@@ -205,7 +208,6 @@ router.post("/boards/:boardId/pay", requireAuth as any, async (req: AuthRequest,
     amountUsd: entryFee.toFixed(2),
     status: "COMPLETED",
     paymentMethod: "SYSTEM",
-    fromBoard: boardId,
     description: `Payment for board ${boardId}`,
   });
 
@@ -256,14 +258,13 @@ router.post("/boards/:boardId/pay", requireAuth as any, async (req: AuthRequest,
         amountUsd: withdrawable.toFixed(2),
         status: "COMPLETED",
         paymentMethod: "SYSTEM",
-        fromBoard: boardId,
         description: `Board ${boardId} completed - earnings`,
       });
 
       await db.insert(notificationsTable).values({
         userId: instance.rankerId,
         type: "BOARD_COMPLETED",
-        title: `Board ${boardId} complété ! 🎉`,
+        title: `Board ${boardId} complété !`,
         message: `Félicitations ! Vous avez gagné $${withdrawable.toFixed(2)}.`,
         category: "financial",
         actionUrl: `/boards/${boardId}`,

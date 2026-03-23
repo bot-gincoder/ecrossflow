@@ -17,7 +17,7 @@ export const usersTable = pgTable("users", {
   phone: varchar("phone", { length: 20 }),
   avatarUrl: text("avatar_url"),
   referralCode: varchar("referral_code", { length: 20 }).unique().notNull(),
-  referredBy: uuid("referred_by").references(() => usersTable.id),
+  referredBy: uuid("referred_by"),
   status: userStatusEnum("status").default("PENDING").notNull(),
   role: userRoleEnum("role").default("USER").notNull(),
   kycStatus: kycStatusEnum("kyc_status").default("NONE").notNull(),

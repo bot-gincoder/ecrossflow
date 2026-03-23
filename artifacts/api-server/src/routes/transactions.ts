@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
-router.get("/transactions", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/transactions", requireAuth as never, async (req: AuthRequest, res) => {
   const { type, status, page = "1", limit = "20", dateFrom, dateTo } = req.query as Record<string, string>;
   const pageNum = parseInt(page);
   const limitNum = parseInt(limit);
@@ -52,7 +52,7 @@ router.get("/transactions", requireAuth as any, async (req: AuthRequest, res) =>
   });
 });
 
-router.get("/transactions/report", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/transactions/report", requireAuth as never, async (req: AuthRequest, res) => {
   const allTxs = await db.select()
     .from(transactionsTable)
     .where(and(

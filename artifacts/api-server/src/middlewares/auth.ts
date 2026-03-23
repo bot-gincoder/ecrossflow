@@ -1,10 +1,11 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
-import { db } from "@workspace/db";
-import { usersTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
 
-const JWT_SECRET = process.env.JWT_SECRET || "ecrossflow-secret-key-change-in-production";
+const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET environment variable must be set");
+  return secret;
+})();
 
 export interface AuthRequest extends Request {
   userId?: string;
@@ -20,7 +21,7 @@ export async function requireAuth(req: AuthRequest, res: Response, next: NextFun
 
   const token = authHeader.split(" ")[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; role: string };
+    const decoded = jwt.verify(token, JWT_SECRET) as unknown as { userId: string; role: string };
     req.userId = decoded.userId;
     req.userRole = decoded.role;
     next();

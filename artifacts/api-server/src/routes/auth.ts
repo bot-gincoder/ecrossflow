@@ -228,7 +228,7 @@ router.post("/auth/login", async (req, res) => {
   });
 });
 
-router.post("/auth/logout", requireAuth as any, (req, res) => {
+router.post("/auth/logout", requireAuth as never, (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
 

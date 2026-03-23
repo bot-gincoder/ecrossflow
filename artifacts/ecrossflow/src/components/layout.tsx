@@ -7,7 +7,8 @@ import {
   CreditCard, BarChart
 } from 'lucide-react';
 import { useAppStore } from '@/hooks/use-store';
-import { useGetMe, useLogout } from '@workspace/api-client-react';
+import type { Theme, Language } from '@/hooks/use-store';
+import { useGetMe, useLogout, getGetMeQueryKey } from '@workspace/api-client-react';
 
 const NavLink = ({ href, icon: Icon, children, currentPath }: { href: string, icon: any, children: ReactNode, currentPath: string }) => {
   const isActive = currentPath === href || (href !== '/' && currentPath.startsWith(href));
@@ -42,6 +43,7 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   
   const { data: user, isLoading, isError } = useGetMe({ 
     query: { 
+      queryKey: getGetMeQueryKey(),
       retry: false,
       enabled: !!token
     } 

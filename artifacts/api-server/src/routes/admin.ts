@@ -1,12 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
 import { usersTable, walletsTable, transactionsTable, boardInstancesTable, notificationsTable } from "@workspace/db";
-import { eq, desc, ilike, and, count, sql, or, ne } from "drizzle-orm";
+import { eq, desc, ilike, and, count, or } from "drizzle-orm";
 import { requireAdmin, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
-router.get("/admin/stats", requireAdmin as any, async (req: AuthRequest, res) => {
+router.get("/admin/stats", requireAdmin as never, async (req: AuthRequest, res) => {
   const [totalUsers] = await db.select({ count: count() }).from(usersTable);
   const [activeUsers] = await db.select({ count: count() }).from(usersTable).where(eq(usersTable.status, "ACTIVE"));
   const [pendingUsers] = await db.select({ count: count() }).from(usersTable).where(eq(usersTable.status, "PENDING"));
@@ -35,15 +35,15 @@ router.get("/admin/stats", requireAdmin as any, async (req: AuthRequest, res) =>
   });
 });
 
-router.get("/admin/users", requireAdmin as any, async (req: AuthRequest, res) => {
+router.get("/admin/users", requireAdmin as never, async (req: AuthRequest, res) => {
   const { page = "1", limit = "20", search, status } = req.query as Record<string, string>;
   const pageNum = parseInt(page);
   const limitNum = parseInt(limit);
   const offset = (pageNum - 1) * limitNum;
 
-  const conditions: any[] = [];
+  const conditions = [];
   if (search) conditions.push(or(ilike(usersTable.username, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
-  if (status) conditions.push(eq(usersTable.status, status as any));
+  if (status) conditions.push(eq(usersTable.status, status as "PENDING" | "ACTIVE" | "SUSPENDED"));
 
   const [totalResult] = await db.select({ count: count() })
     .from(usersTable)
@@ -86,24 +86,27 @@ router.get("/admin/users", requireAdmin as any, async (req: AuthRequest, res) =>
   });
 });
 
-router.put("/admin/users/:id/suspend", requireAdmin as any, async (req: AuthRequest, res) => {
-  await db.update(usersTable).set({ status: "SUSPENDED" }).where(eq(usersTable.id, req.params.id));
+router.put("/admin/users/:id/suspend", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  await db.update(usersTable).set({ status: "SUSPENDED" }).where(eq(usersTable.id, id));
   res.json({ message: "User suspended" });
 });
 
-router.put("/admin/users/:id/activate", requireAdmin as any, async (req: AuthRequest, res) => {
-  await db.update(usersTable).set({ status: "ACTIVE", activatedAt: new Date() }).where(eq(usersTable.id, req.params.id));
+router.put("/admin/users/:id/activate", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  await db.update(usersTable).set({ status: "ACTIVE", activatedAt: new Date() }).where(eq(usersTable.id, id));
   res.json({ message: "User activated" });
 });
 
-router.post("/admin/users/:id/adjust-balance", requireAdmin as any, async (req: AuthRequest, res) => {
+router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
   const { amount, note } = req.body;
   if (!amount || !note) {
     res.status(400).json({ error: "Bad Request", message: "Amount and note required" });
     return;
   }
 
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.params.id)).limit(1);
+  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, id)).limit(1);
   if (!wallets.length) {
     res.status(404).json({ error: "Not Found", message: "Wallet not found" });
     return;
@@ -113,10 +116,10 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as any, async (req: 
   const newBalance = currentBalance + parseFloat(amount);
   await db.update(walletsTable)
     .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-    .where(eq(walletsTable.userId, req.params.id));
+    .where(eq(walletsTable.userId, id));
 
   await db.insert(transactionsTable).values({
-    userId: req.params.id,
+    userId: id,
     type: "SYSTEM_FEE",
     amount: Math.abs(parseFloat(amount)).toFixed(2),
     currency: "USD",
@@ -130,7 +133,7 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as any, async (req: 
   res.json({ message: "Balance adjusted successfully" });
 });
 
-router.get("/admin/deposits/pending", requireAdmin as any, async (req: AuthRequest, res) => {
+router.get("/admin/deposits/pending", requireAdmin as never, async (req: AuthRequest, res) => {
   const pending = await db.select({
     id: transactionsTable.id,
     userId: transactionsTable.userId,
@@ -164,15 +167,16 @@ router.get("/admin/deposits/pending", requireAdmin as any, async (req: AuthReque
   });
 });
 
-router.put("/admin/deposits/:id/approve", requireAdmin as any, async (req: AuthRequest, res) => {
-  const txList = await db.select().from(transactionsTable).where(eq(transactionsTable.id, req.params.id)).limit(1);
+router.put("/admin/deposits/:id/approve", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  const txList = await db.select().from(transactionsTable).where(eq(transactionsTable.id, id)).limit(1);
   if (!txList.length) {
     res.status(404).json({ error: "Not Found" });
     return;
   }
   const tx = txList[0];
 
-  await db.update(transactionsTable).set({ status: "COMPLETED" }).where(eq(transactionsTable.id, req.params.id));
+  await db.update(transactionsTable).set({ status: "COMPLETED" }).where(eq(transactionsTable.id, id));
 
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, tx.userId)).limit(1);
   if (wallets.length) {
@@ -195,9 +199,10 @@ router.put("/admin/deposits/:id/approve", requireAdmin as any, async (req: AuthR
   res.json({ message: "Deposit approved" });
 });
 
-router.put("/admin/deposits/:id/reject", requireAdmin as any, async (req: AuthRequest, res) => {
+router.put("/admin/deposits/:id/reject", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
   const { reason } = req.body;
-  const txList = await db.select().from(transactionsTable).where(eq(transactionsTable.id, req.params.id)).limit(1);
+  const txList = await db.select().from(transactionsTable).where(eq(transactionsTable.id, id)).limit(1);
   if (!txList.length) {
     res.status(404).json({ error: "Not Found" });
     return;
@@ -206,7 +211,7 @@ router.put("/admin/deposits/:id/reject", requireAdmin as any, async (req: AuthRe
 
   await db.update(transactionsTable)
     .set({ status: "CANCELLED", adminNote: reason })
-    .where(eq(transactionsTable.id, req.params.id));
+    .where(eq(transactionsTable.id, id));
 
   await db.insert(notificationsTable).values({
     userId: tx.userId,

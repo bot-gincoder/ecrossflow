@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-type Theme = 'light' | 'dark' | 'midnight' | 'gold';
-type Language = 'fr' | 'en' | 'es' | 'ht';
+export type Theme = 'light' | 'dark' | 'midnight' | 'gold';
+export type Language = 'fr' | 'en' | 'es' | 'ht';
 
 interface AppState {
   theme: Theme;

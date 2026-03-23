@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Wallet, ArrowDownCircle, ArrowUpCircle, RefreshCcw, DollarSign, TrendingUp, Loader2, AlertCircle } from 'lucide-react';
 import { useGetWallet, useGetExchangeRates, useCreateDeposit, useCreateWithdrawal, useConvertCurrency } from '@workspace/api-client-react';
+import type { DepositRequestPaymentMethod, WithdrawalRequestPaymentMethod } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -44,9 +45,9 @@ export default function WalletPage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (tab === 'deposit') {
-      deposit({ data: { amount: parseFloat(amount), currency, paymentMethod, reference } });
+      deposit({ data: { amount: parseFloat(amount), currency, paymentMethod: paymentMethod as DepositRequestPaymentMethod, reference } });
     } else if (tab === 'withdraw') {
-      withdraw({ data: { amount: parseFloat(amount), currency, paymentMethod, destination } });
+      withdraw({ data: { amount: parseFloat(amount), currency, paymentMethod: paymentMethod as WithdrawalRequestPaymentMethod, destination } });
     } else {
       convert({ data: { amount: parseFloat(amount), fromCurrency: currency, toCurrency } });
     }

@@ -6,7 +6,7 @@ import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
 
-router.get("/referrals", requireAuth as any, async (req: AuthRequest, res) => {
+router.get("/referrals", requireAuth as never, async (req: AuthRequest, res) => {
   const user = await db.select({ referralCode: usersTable.referralCode })
     .from(usersTable)
     .where(eq(usersTable.id, req.userId!))
