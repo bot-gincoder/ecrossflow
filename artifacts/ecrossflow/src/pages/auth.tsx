@@ -92,9 +92,13 @@ export default function AuthPage() {
         setLocation('/dashboard');
       },
       onError: (error) => {
-        const data = error?.data as { code?: string; email?: string } | undefined;
+        const data = error?.data as { code?: string; email?: string; verificationToken?: string } | undefined;
         if (data?.code === 'EMAIL_NOT_VERIFIED' && data?.email) {
           setPendingEmail(data.email);
+          if (data.verificationToken) {
+            setToken(data.verificationToken);
+            setLocation(`/auth/verify-email?email=${encodeURIComponent(data.email)}`);
+          }
         }
       }
     }

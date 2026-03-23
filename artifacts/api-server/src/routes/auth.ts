@@ -218,7 +218,19 @@ router.post("/auth/login", async (req, res) => {
   }
 
   if (user.status === "PENDING") {
-    res.status(403).json({ error: "Forbidden", message: "Email not verified. Please check your inbox for the verification code.", code: "EMAIL_NOT_VERIFIED", email: user.email });
+    const validPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!validPassword) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid credentials" });
+      return;
+    }
+    const verificationToken = signToken(user.id, user.role, false);
+    res.status(403).json({
+      error: "Forbidden",
+      message: "Email not verified. Please check your inbox for the verification code.",
+      code: "EMAIL_NOT_VERIFIED",
+      email: user.email,
+      verificationToken,
+    });
     return;
   }
 

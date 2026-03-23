@@ -88,31 +88,17 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
 
-  const status = ["MONCASH", "NATCASH", "BANK_TRANSFER"].includes(String(paymentMethod)) ? "PENDING" : "PROCESSING";
-
   const [tx] = await db.insert(transactionsTable).values({
     userId: req.userId!,
     type: "DEPOSIT",
     amount: amountNum.toFixed(2),
     currency: String(currency),
     amountUsd: amountUsd.toFixed(2),
-    status,
+    status: "PENDING",
     paymentMethod: String(paymentMethod) as PaymentMethodValue,
     referenceId: reference ? String(reference) : null,
     description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
   }).returning();
-
-  if (status === "PROCESSING") {
-    const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
-    if (wallets.length) {
-      const newBalance = parseFloat(wallets[0].balanceUsd) + amountUsd;
-      await db.update(walletsTable)
-        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-        .where(eq(walletsTable.userId, req.userId!));
-
-      await db.update(transactionsTable).set({ status: "COMPLETED" }).where(eq(transactionsTable.id, tx.id));
-    }
-  }
 
   await db.insert(notificationsTable).values({
     userId: req.userId!,
