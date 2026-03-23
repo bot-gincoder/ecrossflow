@@ -1,22 +1,27 @@
 import React from 'react';
 import { motion } from 'framer-motion';
-import { Bell, CheckCheck, Info, DollarSign, Shield, Zap } from 'lucide-react';
+import { Bell, CheckCheck, Info, DollarSign, Shield, Zap, LucideIcon } from 'lucide-react';
 import { useGetNotifications, useMarkAllNotificationsRead, useMarkNotificationRead } from '@workspace/api-client-react';
+import type { GetNotificationsFilter, Notification } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 
-const CATEGORY_ICONS: Record<string, any> = {
+const CATEGORY_ICONS: Record<string, LucideIcon> = {
   financial: DollarSign,
   security: Shield,
   system: Info,
   board: Zap,
 };
 
+type FilterOption = GetNotificationsFilter | 'all';
+
 export default function NotificationsPage() {
-  const [filter, setFilter] = React.useState('all');
+  const [filter, setFilter] = React.useState<FilterOption>('all');
   const queryClient = useQueryClient();
 
-  const { data } = useGetNotifications({ filter } as any);
+  const { data } = useGetNotifications({
+    filter: filter === 'all' ? undefined : filter,
+  });
   const { mutate: markAllRead } = useMarkAllNotificationsRead({
     mutation: { onSuccess: () => queryClient.invalidateQueries() }
   });
@@ -48,7 +53,7 @@ export default function NotificationsPage() {
 
         {/* Filter Tabs */}
         <div className="flex gap-2">
-          {['all', 'unread', 'financial', 'security'].map(f => (
+          {(['all', 'unread', 'financial', 'security'] satisfies FilterOption[]).map(f => (
             <button
               key={f}
               onClick={() => setFilter(f)}
@@ -67,7 +72,7 @@ export default function NotificationsPage() {
               <p>Aucune notification</p>
             </div>
           )}
-          {notifications.map((n: any, idx: number) => {
+          {notifications.map((n: Notification, idx: number) => {
             const Icon = CATEGORY_ICONS[n.category] || Bell;
             return (
               <motion.div

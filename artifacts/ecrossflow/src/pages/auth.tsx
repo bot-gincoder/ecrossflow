@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLocation } from 'wouter';
-import { useLogin, useRegister, useCheckUsername } from '@workspace/api-client-react';
+import { useLogin, useRegister } from '@workspace/api-client-react';
+import type { ErrorResponse, RegisterRequest, LoginMutationError, RegisterMutationError } from '@workspace/api-client-react';
 import { useAppStore } from '@/hooks/use-store';
 import { Loader2, ArrowRight, ShieldCheck, Mail, Lock, User, Hash } from 'lucide-react';
 
@@ -36,12 +37,20 @@ export default function AuthPage() {
     if (isLogin) {
       login({ data: { emailOrUsername: formData.email, password: formData.password } });
     } else {
-      register({ data: formData as any });
+      const registerData: RegisterRequest = {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        username: formData.username,
+        email: formData.email,
+        password: formData.password,
+        referralCode: formData.referralCode,
+      };
+      register({ data: registerData });
     }
   };
 
-  const errData = (isLogin ? loginError : registerError) as any;
-  const errorMessage = errData?.response?.data?.message || errData?.message;
+  const activeError: LoginMutationError | RegisterMutationError | null = isLogin ? loginError : registerError;
+  const errorMessage = activeError?.data?.message || activeError?.message;
 
   return (
     <div className="min-h-screen flex bg-background selection:bg-primary/30">

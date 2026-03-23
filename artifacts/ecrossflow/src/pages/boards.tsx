@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Layers, Trophy, Clock, ChevronRight, Users, ArrowRight, Zap, DollarSign, AlertCircle } from 'lucide-react';
 import { useGetBoards, useGetMyBoardStatus, useGetWallet, usePayBoard } from '@workspace/api-client-react';
+import type { Board, UserBoardStatus } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -38,8 +39,8 @@ export default function Boards() {
   const boards = boardsData?.boards || [];
   const statuses = statusData?.statuses || [];
 
-  const getStatus = (boardId: string) =>
-    statuses.find((s: any) => s.boardId === boardId);
+  const getStatus = (boardId: string): UserBoardStatus | undefined =>
+    statuses.find((s: UserBoardStatus) => s.boardId === boardId);
 
   const handlePay = (boardId: string) => {
     setPaying(boardId);
@@ -60,7 +61,7 @@ export default function Boards() {
         <div className="flex flex-col items-center space-y-2 py-4">
           {[...boardKeys].reverse().map((boardId, reversedIdx) => {
             const idx = boardKeys.length - 1 - reversedIdx;
-            const board = boards.find((b: any) => b.id === boardId);
+            const board = boards.find((b: Board) => b.id === boardId);
             const status = getStatus(boardId);
             const colors = BOARD_COLORS[boardId];
             const width = `${20 + (idx * 12)}%`;
@@ -90,7 +91,7 @@ export default function Boards() {
         {/* Board Detail Panel */}
         <AnimatePresence>
           {selectedBoard && (() => {
-            const board = boards.find((b: any) => b.id === selectedBoard);
+            const board = boards.find((b: Board) => b.id === selectedBoard);
             const status = getStatus(selectedBoard);
             const colors = BOARD_COLORS[selectedBoard];
             if (!board) return null;
@@ -152,7 +153,7 @@ export default function Boards() {
         {/* Board Cards Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {boardKeys.map((boardId, idx) => {
-            const board = boards.find((b: any) => b.id === boardId);
+            const board = boards.find((b: Board) => b.id === boardId);
             const status = getStatus(boardId);
             const colors = BOARD_COLORS[boardId];
 

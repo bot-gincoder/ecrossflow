@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { History, ArrowDownCircle, ArrowUpCircle, Zap, Award, Filter, RefreshCcw } from 'lucide-react';
+import { History, ArrowDownCircle, ArrowUpCircle, Zap, Award, Filter, RefreshCcw, LucideIcon } from 'lucide-react';
 import { useGetTransactions } from '@workspace/api-client-react';
+import type { Transaction } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 
-const TYPE_ICONS: Record<string, { icon: any; label: string; color: string }> = {
+const TYPE_ICONS: Record<string, { icon: LucideIcon; label: string; color: string }> = {
   DEPOSIT: { icon: ArrowDownCircle, label: 'Dépôt', color: 'text-emerald-400' },
   WITHDRAWAL: { icon: ArrowUpCircle, label: 'Retrait', color: 'text-red-400' },
   BOARD_PAYMENT: { icon: Zap, label: 'Paiement Board', color: 'text-yellow-400' },
@@ -28,7 +29,7 @@ export default function HistoryPage() {
     type: typeFilter || undefined,
     page,
     limit: 20,
-  } as any);
+  });
 
   const transactions = data?.transactions || [];
   const totalPages = data?.totalPages || 1;
@@ -73,7 +74,7 @@ export default function HistoryPage() {
               <p>Aucune transaction trouvée</p>
             </div>
           )}
-          {transactions.map((tx: any, idx: number) => {
+          {transactions.map((tx: Transaction, idx: number) => {
             const typeInfo = TYPE_ICONS[tx.type] || { icon: Filter, label: tx.type, color: 'text-muted-foreground' };
             const Icon = typeInfo.icon;
             const isIncoming = ['DEPOSIT', 'BOARD_RECEIPT', 'REFERRAL_BONUS'].includes(tx.type);

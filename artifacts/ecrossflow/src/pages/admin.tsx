@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Users, DollarSign, Activity, CheckCircle, XCircle, Loader2, Search, BarChart3, ShieldAlert } from 'lucide-react';
+import { Users, DollarSign, Activity, CheckCircle, XCircle, Loader2, Search, BarChart3, ShieldAlert, LucideIcon } from 'lucide-react';
 import { useGetAdminStats, useGetAdminUsers, useGetPendingDeposits, useApproveDeposit, useRejectDeposit, useActivateUser, useSuspendUser } from '@workspace/api-client-react';
+import type { AdminUser, AdminDeposit } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -15,7 +16,7 @@ export default function AdminPage() {
   const queryClient = useQueryClient();
 
   const { data: stats } = useGetAdminStats();
-  const { data: usersData } = useGetAdminUsers({ search: search || undefined } as any);
+  const { data: usersData } = useGetAdminUsers({ search: search || undefined });
   const { data: depositsData } = useGetPendingDeposits();
 
   const { mutate: approve } = useApproveDeposit({ mutation: { onSuccess: () => queryClient.invalidateQueries() } });
@@ -36,7 +37,7 @@ export default function AdminPage() {
 
         {/* Tabs */}
         <div className="flex gap-2 bg-muted/30 p-1 rounded-xl w-fit">
-          {([['overview', 'Vue Globale', BarChart3], ['users', 'Utilisateurs', Users], ['deposits', 'Dépôts en attente', DollarSign]] as [AdminTab, string, any][]).map(([t, label, Icon]) => (
+          {([['overview', 'Vue Globale', BarChart3], ['users', 'Utilisateurs', Users], ['deposits', 'Dépôts en attente', DollarSign]] satisfies [AdminTab, string, LucideIcon][]).map(([t, label, Icon]) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -86,7 +87,7 @@ export default function AdminPage() {
               />
             </div>
             <div className="space-y-2">
-              {usersData?.users?.map((u: any, idx: number) => (
+              {usersData?.users?.map((u: AdminUser, idx: number) => (
                 <motion.div
                   key={u.id}
                   initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.02 }}
@@ -138,7 +139,7 @@ export default function AdminPage() {
                 <p>Aucun dépôt en attente</p>
               </div>
             )}
-            {depositsData?.deposits?.map((d: any, idx: number) => (
+            {depositsData?.deposits?.map((d: AdminDeposit, idx: number) => (
               <motion.div
                 key={d.id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.05 }}

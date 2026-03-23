@@ -34,8 +34,8 @@ router.get("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
 });
 
 router.put("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
-  const { firstName, lastName, phone } = req.body;
-  const updates: any = {};
+  const { firstName, lastName, phone } = req.body as { firstName?: string; lastName?: string; phone?: string };
+  const updates: Partial<typeof usersTable.$inferInsert> = {};
   if (firstName) updates.firstName = firstName;
   if (lastName) updates.lastName = lastName;
   if (phone !== undefined) updates.phone = phone;
@@ -63,8 +63,12 @@ router.put("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
 });
 
 router.put("/users/me/settings", requireAuth as never, async (req: AuthRequest, res) => {
-  const { preferredLanguage, preferredCurrency, preferredTheme } = req.body;
-  const updates: any = { updatedAt: new Date() };
+  const { preferredLanguage, preferredCurrency, preferredTheme } = req.body as {
+    preferredLanguage?: string;
+    preferredCurrency?: string;
+    preferredTheme?: string;
+  };
+  const updates: Partial<typeof usersTable.$inferInsert> = { updatedAt: new Date() };
   if (preferredLanguage) updates.preferredLanguage = preferredLanguage;
   if (preferredCurrency) updates.preferredCurrency = preferredCurrency;
   if (preferredTheme) updates.preferredTheme = preferredTheme;

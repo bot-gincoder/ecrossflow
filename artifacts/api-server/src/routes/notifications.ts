@@ -1,10 +1,12 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { notificationsTable } from "@workspace/db";
-import { eq, and, desc, count } from "drizzle-orm";
+import { notificationsTable, notificationCategoryEnum } from "@workspace/db";
+import { eq, and, desc, count, type SQL } from "drizzle-orm";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
+
+const VALID_CATEGORIES = notificationCategoryEnum.enumValues;
 
 router.get("/notifications", requireAuth as never, async (req: AuthRequest, res) => {
   const { page = "1", filter = "all" } = req.query as { page: string; filter: string };
@@ -12,10 +14,12 @@ router.get("/notifications", requireAuth as never, async (req: AuthRequest, res)
   const limitNum = 20;
   const offset = (pageNum - 1) * limitNum;
 
-  const conditions: any[] = [eq(notificationsTable.userId, req.userId!)];
-  if (filter === "unread") conditions.push(eq(notificationsTable.read, false));
-  else if (filter === "financial") conditions.push(eq(notificationsTable.category, "financial"));
-  else if (filter === "security") conditions.push(eq(notificationsTable.category, "security"));
+  const conditions: SQL[] = [eq(notificationsTable.userId, req.userId!)];
+  if (filter === "unread") {
+    conditions.push(eq(notificationsTable.read, false));
+  } else if ((VALID_CATEGORIES as readonly string[]).includes(filter)) {
+    conditions.push(eq(notificationsTable.category, filter as typeof VALID_CATEGORIES[number]));
+  }
 
   const [totalResult] = await db.select({ count: count() })
     .from(notificationsTable)

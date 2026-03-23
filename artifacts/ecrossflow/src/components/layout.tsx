@@ -10,7 +10,7 @@ import { useAppStore } from '@/hooks/use-store';
 import type { Theme, Language } from '@/hooks/use-store';
 import { useGetMe, useLogout, getGetMeQueryKey } from '@workspace/api-client-react';
 
-const NavLink = ({ href, icon: Icon, children, currentPath }: { href: string, icon: any, children: ReactNode, currentPath: string }) => {
+const NavLink = ({ href, icon: Icon, children, currentPath }: { href: string, icon: React.ElementType, children: ReactNode, currentPath: string }) => {
   const isActive = currentPath === href || (href !== '/' && currentPath.startsWith(href));
   
   return (

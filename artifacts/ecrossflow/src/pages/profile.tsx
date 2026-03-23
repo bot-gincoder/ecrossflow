@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { User, Shield, Palette, Globe, Save, Loader2 } from 'lucide-react';
 import { useGetMe, useUpdateSettings } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
-import { useAppStore } from '@/hooks/use-store';
+import { useAppStore, type Theme, type Language } from '@/hooks/use-store';
 import { useQueryClient } from '@tanstack/react-query';
 
 export default function ProfilePage() {
@@ -82,15 +82,15 @@ export default function ProfilePage() {
                 <Palette className="w-4 h-4" /> Thème
               </label>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {[
-                  { value: 'light', label: 'Light', icon: '☀️' },
-                  { value: 'dark', label: 'Dark', icon: '🌙' },
-                  { value: 'midnight', label: 'Midnight', icon: '🌌' },
-                  { value: 'gold', label: 'Gold', icon: '✨' },
-                ].map(t => (
+                {([
+                  { value: 'light' as Theme, label: 'Light', icon: '☀️' },
+                  { value: 'dark' as Theme, label: 'Dark', icon: '🌙' },
+                  { value: 'midnight' as Theme, label: 'Midnight', icon: '🌌' },
+                  { value: 'gold' as Theme, label: 'Gold', icon: '✨' },
+                ] satisfies { value: Theme; label: string; icon: string }[]).map(t => (
                   <button
                     key={t.value}
-                    onClick={() => setTheme(t.value as any)}
+                    onClick={() => setTheme(t.value)}
                     className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${theme === t.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'}`}
                   >
                     <span>{t.icon}</span> {t.label}
@@ -104,15 +104,15 @@ export default function ProfilePage() {
                 <Globe className="w-4 h-4" /> Langue
               </label>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {[
-                  { value: 'fr', label: 'Français', flag: '🇫🇷' },
-                  { value: 'en', label: 'English', flag: '🇬🇧' },
-                  { value: 'es', label: 'Español', flag: '🇪🇸' },
-                  { value: 'ht', label: 'Kreyòl', flag: '🇭🇹' },
-                ].map(l => (
+                {([
+                  { value: 'fr' as Language, label: 'Français', flag: '🇫🇷' },
+                  { value: 'en' as Language, label: 'English', flag: '🇬🇧' },
+                  { value: 'es' as Language, label: 'Español', flag: '🇪🇸' },
+                  { value: 'ht' as Language, label: 'Kreyòl', flag: '🇭🇹' },
+                ] satisfies { value: Language; label: string; flag: string }[]).map(l => (
                   <button
                     key={l.value}
-                    onClick={() => setLanguage(l.value as any)}
+                    onClick={() => setLanguage(l.value)}
                     className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${language === l.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'}`}
                   >
                     <span>{l.flag}</span> {l.label}

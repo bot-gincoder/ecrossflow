@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Users, Copy, Gift, Check, Share2, ExternalLink } from 'lucide-react';
 import { useGetReferrals } from '@workspace/api-client-react';
+import type { ReferralItem } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 
 export default function ReferralsPage() {
@@ -96,7 +97,7 @@ export default function ReferralsPage() {
                 <p className="text-sm mt-1">Partagez votre code pour commencer !</p>
               </div>
             )}
-            {data?.referrals?.map((r: any, idx: number) => (
+            {data?.referrals?.map((r: ReferralItem, idx: number) => (
               <motion.div
                 key={r.id}
                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: idx * 0.05 }}

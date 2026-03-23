@@ -1,10 +1,13 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { transactionsTable, boardParticipantsTable, boardInstancesTable } from "@workspace/db";
-import { eq, desc, and, gte, lte, sql, count } from "drizzle-orm";
+import { transactionsTable, transactionTypeEnum, transactionStatusEnum } from "@workspace/db";
+import { eq, desc, and, gte, lte, count, SQL } from "drizzle-orm";
 import { requireAuth, type AuthRequest } from "../middlewares/auth.js";
 
 const router: IRouter = Router();
+
+const VALID_TYPES = transactionTypeEnum.enumValues;
+const VALID_STATUSES = transactionStatusEnum.enumValues;
 
 router.get("/transactions", requireAuth as never, async (req: AuthRequest, res) => {
   const { type, status, page = "1", limit = "20", dateFrom, dateTo } = req.query as Record<string, string>;
@@ -12,9 +15,14 @@ router.get("/transactions", requireAuth as never, async (req: AuthRequest, res) 
   const limitNum = parseInt(limit);
   const offset = (pageNum - 1) * limitNum;
 
-  const conditions: any[] = [eq(transactionsTable.userId, req.userId!)];
-  if (type) conditions.push(eq(transactionsTable.type, type as any));
-  if (status) conditions.push(eq(transactionsTable.status, status as any));
+  const conditions: SQL[] = [eq(transactionsTable.userId, req.userId!)];
+
+  if (type && (VALID_TYPES as readonly string[]).includes(type)) {
+    conditions.push(eq(transactionsTable.type, type as typeof VALID_TYPES[number]));
+  }
+  if (status && (VALID_STATUSES as readonly string[]).includes(status)) {
+    conditions.push(eq(transactionsTable.status, status as typeof VALID_STATUSES[number]));
+  }
   if (dateFrom) conditions.push(gte(transactionsTable.createdAt, new Date(dateFrom)));
   if (dateTo) conditions.push(lte(transactionsTable.createdAt, new Date(dateTo)));
 
