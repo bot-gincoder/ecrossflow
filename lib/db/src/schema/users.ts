@@ -14,6 +14,7 @@ export const usersTable = pgTable("users", {
   username: varchar("username", { length: 50 }).unique().notNull(),
   email: varchar("email", { length: 255 }).unique().notNull(),
   passwordHash: text("password_hash").notNull(),
+  googleId: varchar("google_id", { length: 120 }).unique(),
   phone: varchar("phone", { length: 20 }),
   avatarUrl: text("avatar_url"),
   referralCode: varchar("referral_code", { length: 20 }).unique().notNull(),

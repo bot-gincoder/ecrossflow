@@ -1,5 +1,6 @@
 import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useEffect } from "react";
@@ -33,6 +34,8 @@ const queryClient = new QueryClient({
     }
   }
 });
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
 function RedirectTo({ to }: { to: string }) {
   const [, navigate] = useLocation();
@@ -90,7 +93,7 @@ function Router() {
   );
 }
 
-function App() {
+function AppContent() {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
@@ -103,6 +106,17 @@ function App() {
       </TooltipProvider>
     </QueryClientProvider>
   );
+}
+
+function App() {
+  if (GOOGLE_CLIENT_ID) {
+    return (
+      <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+        <AppContent />
+      </GoogleOAuthProvider>
+    );
+  }
+  return <AppContent />;
 }
 
 export default App;

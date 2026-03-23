@@ -5,6 +5,11 @@ import { usersTable, walletsTable, referralsTable, notificationsTable } from "@w
 import { eq, or } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { sendEmail, buildOtpEmail } from "../services/email.js";
+import { OAuth2Client } from "google-auth-library";
+
+const googleClient = process.env.GOOGLE_CLIENT_ID
+  ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
+  : null;
 
 interface OtpEntry {
   otp: string;
@@ -75,6 +80,207 @@ router.get("/auth/check-username", async (req, res) => {
     .limit(1);
 
   res.json({ available: !existing.length });
+});
+
+router.post("/auth/google", async (req, res) => {
+  if (!googleClient && !process.env.GOOGLE_CLIENT_ID) {
+    res.status(503).json({ error: "Service Unavailable", message: "Google authentication is not configured on this server." });
+    return;
+  }
+
+  const { accessToken, referralCode, phone } = req.body as {
+    accessToken?: string;
+    referralCode?: string;
+    phone?: string;
+  };
+
+  if (!accessToken) {
+    res.status(400).json({ error: "Bad Request", message: "Google access token required" });
+    return;
+  }
+
+  let googlePayload: { sub: string; email: string; given_name?: string; family_name?: string; picture?: string; name?: string } | null = null;
+  try {
+    const response = await fetch(`https://www.googleapis.com/oauth2/v3/userinfo`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) throw new Error("Failed to verify token");
+    const info = await response.json() as {
+      sub: string;
+      email: string;
+      given_name?: string;
+      family_name?: string;
+      picture?: string;
+      name?: string;
+    };
+    if (!info.sub || !info.email) throw new Error("Invalid token payload");
+    googlePayload = info;
+  } catch {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid Google token" });
+    return;
+  }
+
+  const { sub: googleId, email, given_name, family_name, picture, name } = googlePayload;
+
+  const existing = await db.select()
+    .from(usersTable)
+    .where(or(
+      eq(usersTable.googleId, googleId),
+      eq(usersTable.email, email.toLowerCase())
+    ))
+    .limit(1);
+
+  if (existing.length) {
+    const user = existing[0];
+
+    if (user.status === "SUSPENDED") {
+      res.status(401).json({ error: "Unauthorized", message: "Account suspended" });
+      return;
+    }
+
+    if (!user.googleId) {
+      await db.update(usersTable)
+        .set({ googleId, avatarUrl: user.avatarUrl || picture || null })
+        .where(eq(usersTable.id, user.id));
+    }
+
+    const token = signToken(user.id, user.role, true);
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        accountNumber: user.accountNumber,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        email: user.email,
+        phone: user.phone,
+        avatarUrl: user.avatarUrl || picture || null,
+        referralCode: user.referralCode,
+        status: user.status,
+        role: user.role,
+        preferredLanguage: user.preferredLanguage,
+        preferredCurrency: user.preferredCurrency,
+        preferredTheme: user.preferredTheme,
+        currentBoard: user.currentBoard,
+        createdAt: user.createdAt,
+      },
+    });
+    return;
+  }
+
+  if (!referralCode) {
+    res.status(200).json({
+      code: "GOOGLE_NEW_USER",
+      email,
+      firstName: given_name || (name ? name.split(" ")[0] : ""),
+      lastName: family_name || (name ? name.split(" ").slice(1).join(" ") : ""),
+      avatarUrl: picture || null,
+    });
+    return;
+  }
+
+  const referrer = await db.select({ id: usersTable.id })
+    .from(usersTable)
+    .where(eq(usersTable.referralCode, referralCode.toUpperCase()))
+    .limit(1);
+
+  if (!referrer.length) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid referral code" });
+    return;
+  }
+
+  const firstName = given_name || (name ? name.split(" ")[0] : "") || "User";
+  const lastName = family_name || (name ? name.split(" ").slice(1).join(" ") : "") || "";
+
+  const baseUsername = email.split("@")[0].toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 16);
+  let candidateUsername = baseUsername;
+  let usernameExists = true;
+  let attempt = 0;
+  while (usernameExists) {
+    const check = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.username, candidateUsername))
+      .limit(1);
+    if (!check.length) { usernameExists = false; }
+    else { attempt++; candidateUsername = `${baseUsername}${attempt}`; }
+  }
+
+  let uniqueCode = generateReferralCode();
+  let codeExists = true;
+  while (codeExists) {
+    const check = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.referralCode, uniqueCode))
+      .limit(1);
+    if (!check.length) codeExists = false;
+    else uniqueCode = generateReferralCode();
+  }
+
+  const placeholderHash = await bcrypt.hash(`GOOGLE_${googleId}_${Date.now()}`, 10);
+
+  const [newUser] = await db.insert(usersTable).values({
+    firstName,
+    lastName,
+    username: candidateUsername,
+    email: email.toLowerCase(),
+    passwordHash: placeholderHash,
+    googleId,
+    phone: phone || null,
+    avatarUrl: picture || null,
+    referralCode: uniqueCode,
+    referredBy: referrer[0].id,
+    preferredLanguage: "fr",
+    status: "ACTIVE",
+    role: "USER",
+    activatedAt: new Date(),
+  }).returning();
+
+  await db.insert(walletsTable).values({
+    userId: newUser.id,
+    balanceUsd: "0",
+    balancePending: "0",
+    balanceReserved: "0",
+  });
+
+  await db.insert(referralsTable).values({
+    referrerId: referrer[0].id,
+    referredId: newUser.id,
+    bonusPaid: false,
+  });
+
+  await db.insert(notificationsTable).values({
+    userId: newUser.id,
+    type: "ACCOUNT_CREATED",
+    title: "Bienvenue sur Ecrossflow !",
+    message: `Votre compte a été créé via Google. Bienvenue dans la communauté !`,
+    category: "system",
+    read: false,
+  });
+
+  const token = signToken(newUser.id, newUser.role, true);
+
+  res.status(201).json({
+    token,
+    user: {
+      id: newUser.id,
+      accountNumber: newUser.accountNumber,
+      firstName: newUser.firstName,
+      lastName: newUser.lastName,
+      username: newUser.username,
+      email: newUser.email,
+      phone: newUser.phone,
+      avatarUrl: newUser.avatarUrl,
+      referralCode: newUser.referralCode,
+      status: newUser.status,
+      role: newUser.role,
+      preferredLanguage: newUser.preferredLanguage,
+      preferredCurrency: newUser.preferredCurrency,
+      preferredTheme: newUser.preferredTheme,
+      currentBoard: newUser.currentBoard,
+      createdAt: newUser.createdAt,
+    },
+  });
 });
 
 router.post("/auth/register", async (req, res) => {
