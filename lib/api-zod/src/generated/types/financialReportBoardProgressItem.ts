@@ -8,9 +8,10 @@
 
 export type FinancialReportBoardProgressItem = {
   boardId: string;
-  status: string;
-  completedAt?: string | null;
-  gained: number;
-  withdrawn: number;
-  reinvested: number;
+  entryFee: number;
+  withdrawable: number;
+  totalParticipations: number;
+  completedParticipations: number;
+  totalAmountPaid: number;
+  hasParticipated: boolean;
 };

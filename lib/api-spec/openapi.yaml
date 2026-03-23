@@ -357,6 +357,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/Transaction"
 
+  /wallet/withdraw/request-otp:
+    post:
+      operationId: requestWithdrawalOtp
+      tags: [wallet]
+      summary: Request an OTP code to authorize a withdrawal
+      description: Generates a server-side 6-digit OTP tied to the requested amount. In production the OTP would be sent out-of-band (SMS/email); in demo/development mode it is also returned in the response body.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+                currency:
+                  type: string
+              required:
+                - amount
+                - currency
+      responses:
+        "200":
+          description: OTP issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  otp:
+                    type: string
+                    description: Returned only in demo/development mode. Not sent in production.
+                  expiresInSeconds:
+                    type: integer
+                required:
+                  - message
+                  - expiresInSeconds
+        "400":
+          description: Bad request or insufficient funds
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
   /wallet/withdraw:
     post:
       operationId: createWithdrawal
@@ -455,6 +502,19 @@ paths:
           in: query
           schema:
             type: string
+        - name: paymentMethod
+          in: query
+          schema:
+            type: string
+            enum: [MONCASH, NATCASH, CARD, BANK_TRANSFER, CRYPTO, PAYPAL, SYSTEM]
+        - name: amountMin
+          in: query
+          schema:
+            type: number
+        - name: amountMax
+          in: query
+          schema:
+            type: number
       responses:
         "200":
           description: Transaction list
@@ -1240,6 +1300,9 @@ components:
           type: string
         notes:
           type: string
+        evidenceUrl:
+          type: string
+          description: URL or object reference of the payment screenshot (Moncash/NatCash)
       required:
         - amount
         - currency
@@ -1257,11 +1320,15 @@ components:
           enum: [MONCASH, NATCASH, CARD, BANK_TRANSFER, CRYPTO, PAYPAL]
         destination:
           type: string
+        otp:
+          type: string
+          description: 6-digit OTP code obtained from POST /wallet/withdraw/request-otp
       required:
         - amount
         - currency
         - paymentMethod
         - destination
+        - otp
 
     ConvertRequest:
       type: object
@@ -1280,8 +1347,14 @@ components:
     ConvertResponse:
       type: object
       properties:
+        success:
+          type: boolean
         convertedAmount:
           type: number
+        fromCurrency:
+          type: string
+        toCurrency:
+          type: string
         rate:
           type: number
         fee:
@@ -1397,23 +1470,26 @@ components:
             properties:
               boardId:
                 type: string
-              status:
-                type: string
-              completedAt:
-                type: string
-                nullable: true
-              gained:
+              entryFee:
                 type: number
-              withdrawn:
+              withdrawable:
                 type: number
-              reinvested:
+              totalParticipations:
+                type: integer
+              completedParticipations:
+                type: integer
+              totalAmountPaid:
                 type: number
+              hasParticipated:
+                type: boolean
             required:
               - boardId
-              - status
-              - gained
-              - withdrawn
-              - reinvested
+              - entryFee
+              - withdrawable
+              - totalParticipations
+              - completedParticipations
+              - totalAmountPaid
+              - hasParticipated
       required:
         - totalDeposited
         - totalWithdrawn

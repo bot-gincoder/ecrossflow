@@ -198,6 +198,7 @@ export interface DepositRequest {
   paymentMethod: DepositRequestPaymentMethod;
   reference?: string;
   notes?: string;
+  evidenceUrl?: string;
 }
 
 export type WithdrawalRequestPaymentMethod =
@@ -217,6 +218,7 @@ export interface WithdrawalRequest {
   currency: string;
   paymentMethod: WithdrawalRequestPaymentMethod;
   destination: string;
+  otp: string;
 }
 
 export interface ConvertRequest {
@@ -226,7 +228,10 @@ export interface ConvertRequest {
 }
 
 export interface ConvertResponse {
+  success?: boolean;
   convertedAmount: number;
+  fromCurrency?: string;
+  toCurrency?: string;
   rate: number;
   fee: number;
 }
@@ -289,11 +294,12 @@ export interface TransactionListResponse {
 
 export type FinancialReportBoardProgressItem = {
   boardId: string;
-  status: string;
-  completedAt?: string | null;
-  gained: number;
-  withdrawn: number;
-  reinvested: number;
+  entryFee: number;
+  withdrawable: number;
+  totalParticipations: number;
+  completedParticipations: number;
+  totalAmountPaid: number;
+  hasParticipated: boolean;
 };
 
 export interface FinancialReport {
@@ -535,6 +541,9 @@ export type GetTransactionsParams = {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
+  paymentMethod?: string;
+  amountMin?: number;
+  amountMax?: number;
 };
 
 export type GetNotificationsParams = {

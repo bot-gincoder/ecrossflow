@@ -297,6 +297,20 @@ export const CreateDepositBody = zod.object({
 });
 
 /**
+ * @summary Request an OTP code to authorize a withdrawal
+ */
+export const RequestWithdrawalOtpBody = zod.object({
+  amount: zod.number(),
+  currency: zod.string(),
+});
+
+export const RequestWithdrawalOtpResponse = zod.object({
+  message: zod.string(),
+  otp: zod.string().optional(),
+  expiresInSeconds: zod.number().int(),
+});
+
+/**
  * @summary Create a withdrawal request
  */
 export const CreateWithdrawalBody = zod.object({
@@ -311,6 +325,7 @@ export const CreateWithdrawalBody = zod.object({
     "PAYPAL",
   ]),
   destination: zod.string(),
+  otp: zod.string(),
 });
 
 /**
@@ -404,11 +419,12 @@ export const GetTransactionReportResponse = zod.object({
   boardProgress: zod.array(
     zod.object({
       boardId: zod.string(),
-      status: zod.string(),
-      completedAt: zod.string().nullish(),
-      gained: zod.number(),
-      withdrawn: zod.number(),
-      reinvested: zod.number(),
+      entryFee: zod.number(),
+      withdrawable: zod.number(),
+      totalParticipations: zod.number().int(),
+      completedParticipations: zod.number().int(),
+      totalAmountPaid: zod.number(),
+      hasParticipated: zod.boolean(),
     }),
   ),
 });

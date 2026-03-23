@@ -1290,8 +1290,92 @@ export const useCreateDeposit = <
 };
 
 /**
- * @summary Create a withdrawal request
+ * @summary Request an OTP code to authorize a withdrawal
  */
+export const getRequestWithdrawalOtpUrl = () => {
+  return `/api/wallet/withdraw/request-otp`;
+};
+
+export interface WithdrawalOtpRequest {
+  amount: number;
+  currency: string;
+}
+
+export interface WithdrawalOtpResponse {
+  message: string;
+  otp?: string;
+  expiresInSeconds: number;
+}
+
+export const requestWithdrawalOtp = async (
+  data: WithdrawalOtpRequest,
+  options?: RequestInit,
+): Promise<WithdrawalOtpResponse> => {
+  return customFetch<WithdrawalOtpResponse>(getRequestWithdrawalOtpUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(data),
+  });
+};
+
+export const getRequestWithdrawalOtpMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestWithdrawalOtp>>,
+    TError,
+    { data: BodyType<WithdrawalOtpRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof requestWithdrawalOtp>>,
+  TError,
+  { data: BodyType<WithdrawalOtpRequest> },
+  TContext
+> => {
+  const mutationKey = ["requestWithdrawalOtp"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof requestWithdrawalOtp>>,
+    { data: BodyType<WithdrawalOtpRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+    return requestWithdrawalOtp(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export const useRequestWithdrawalOtp = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof requestWithdrawalOtp>>,
+    TError,
+    { data: BodyType<WithdrawalOtpRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof requestWithdrawalOtp>>,
+  TError,
+  { data: BodyType<WithdrawalOtpRequest> },
+  TContext
+> => {
+  return useMutation(getRequestWithdrawalOtpMutationOptions(options));
+};
+
 export const getCreateWithdrawalUrl = () => {
   return `/api/wallet/withdraw`;
 };

@@ -14,6 +14,7 @@ import Dashboard from "@/pages/dashboard";
 import Boards from "@/pages/boards";
 import WalletPage from "@/pages/wallet";
 import HistoryPage from "@/pages/history";
+import HistoryReport from "@/pages/history-report";
 import ReferralsPage from "@/pages/referrals";
 import NotificationsPage from "@/pages/notifications";
 import ProfilePage from "@/pages/profile";
@@ -70,6 +71,7 @@ function Router() {
       <Route path="/boards" component={Boards} />
       <Route path="/wallet" component={WalletPage} />
       <Route path="/history" component={HistoryPage} />
+      <Route path="/history/report" component={HistoryReport} />
       <Route path="/referrals" component={ReferralsPage} />
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/profile" component={ProfilePage} />

@@ -8,6 +8,13 @@ type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CR
 
 const router: IRouter = Router();
 
+// In-memory OTP store: userId -> { code, expiresAt, amountUsd }
+const withdrawalOtpStore = new Map<string, { code: string; expiresAt: number; amountUsd: number }>();
+
+function generateOtp(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
 const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT"]);
 const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
 const SUPPORTED_WITHDRAW_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"]);
@@ -62,7 +69,7 @@ router.get("/wallet/rates", requireAuth as never, async (req: AuthRequest, res) 
 });
 
 router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, res) => {
-  const { amount, currency, paymentMethod, reference, notes } = req.body;
+  const { amount, currency, paymentMethod, reference, notes, evidenceUrl } = req.body;
 
   if (!amount || !currency || !paymentMethod) {
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
@@ -98,6 +105,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     paymentMethod: String(paymentMethod) as PaymentMethodValue,
     referenceId: reference ? String(reference) : null,
     description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
+    screenshotUrl: evidenceUrl ? String(evidenceUrl) : null,
   }).returning();
 
   await db.insert(notificationsTable).values({
@@ -126,32 +134,104 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
   });
 });
 
+router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: AuthRequest, res) => {
+  const { amount, currency } = req.body;
+
+  if (!amount || !currency) {
+    res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
+    return;
+  }
+  if (!SUPPORTED_CURRENCIES.has(String(currency))) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
+    return;
+  }
+  const amountNum = parsePositiveAmount(amount);
+  if (amountNum === null) {
+    res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
+    return;
+  }
+  const rate = FIXED_RATES[String(currency)] ?? 1;
+  const amountUsd = amountNum / rate;
+
+  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
+  if (!wallets.length || parseFloat(wallets[0].balanceUsd) < amountUsd) {
+    res.status(400).json({ error: "Bad Request", message: "Insufficient funds" });
+    return;
+  }
+
+  const code = generateOtp();
+  // OTP valid for 10 minutes
+  withdrawalOtpStore.set(req.userId!, { code, expiresAt: Date.now() + 10 * 60 * 1000, amountUsd });
+
+  // In production send via SMS/email; in development/demo mode return in response for testing
+  const isDemoMode = process.env.NODE_ENV !== "production";
+  res.json({
+    message: isDemoMode ? "OTP sent (demo mode)" : "OTP sent to your registered contact",
+    ...(isDemoMode ? { otp: code } : {}),
+    expiresInSeconds: 600,
+  });
+});
+
 router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
-  const { amount, currency, paymentMethod, destination } = req.body;
+  const { amount, currency, paymentMethod, destination, otp } = req.body;
+
+  if (!otp) {
+    res.status(400).json({ error: "Bad Request", message: "OTP is required" });
+    return;
+  }
+
+  // Verify OTP
+  const stored = withdrawalOtpStore.get(req.userId!);
+  if (!stored) {
+    res.status(400).json({ error: "Bad Request", message: "No pending OTP. Request a new one." });
+    return;
+  }
+  if (Date.now() > stored.expiresAt) {
+    withdrawalOtpStore.delete(req.userId!);
+    res.status(400).json({ error: "Bad Request", message: "OTP expired. Request a new one." });
+    return;
+  }
+  if (stored.code !== String(otp)) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid OTP" });
+    return;
+  }
 
   if (!amount || !currency || !paymentMethod || !destination) {
+    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
     return;
   }
 
   if (!SUPPORTED_CURRENCIES.has(String(currency))) {
+    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
     return;
   }
 
   if (!SUPPORTED_WITHDRAW_METHODS.has(String(paymentMethod))) {
+    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
     return;
   }
 
   const amountNum = parsePositiveAmount(amount);
   if (amountNum === null) {
+    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
     return;
   }
 
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
+
+  // Verify the withdrawal amount matches the OTP request amount (within 1 cent tolerance)
+  if (Math.abs(amountUsd - stored.amountUsd) > 0.01) {
+    withdrawalOtpStore.delete(req.userId!);
+    res.status(400).json({ error: "Bad Request", message: "Withdrawal amount does not match OTP request. Please request a new OTP." });
+    return;
+  }
+
+  withdrawalOtpStore.delete(req.userId!);
 
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
   if (!wallets.length) {
@@ -220,6 +300,11 @@ router.post("/wallet/convert", requireAuth as never, async (req: AuthRequest, re
     return;
   }
 
+  if (String(fromCurrency) === String(toCurrency)) {
+    res.status(400).json({ error: "Bad Request", message: "Cannot convert to the same currency" });
+    return;
+  }
+
   const amountNum = parsePositiveAmount(amount);
   if (amountNum === null) {
     res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
@@ -230,13 +315,56 @@ router.post("/wallet/convert", requireAuth as never, async (req: AuthRequest, re
   const toRate = FIXED_RATES[String(toCurrency)] ?? 1;
   const amountUsd = amountNum / fromRate;
   const fee = amountUsd * 0.01;
-  const convertedAmount = (amountUsd - fee) * toRate;
+  const convertedAmountUsd = amountUsd - fee;
+  const convertedAmount = convertedAmountUsd * toRate;
 
-  res.json({
-    convertedAmount: parseFloat(convertedAmount.toFixed(6)),
-    rate: toRate / fromRate,
-    fee: parseFloat(fee.toFixed(2)),
-  });
+  try {
+    await db.transaction(async (tx) => {
+      const wallets = await tx.select().from(walletsTable)
+        .where(eq(walletsTable.userId, req.userId!))
+        .for("update")
+        .limit(1);
+      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
+
+      const wallet = wallets[0];
+      const currentBalance = parseFloat(wallet.balanceUsd);
+      if (currentBalance < amountUsd) throw new Error("INSUFFICIENT_FUNDS");
+
+      await tx.update(walletsTable)
+        .set({ balanceUsd: (currentBalance - amountUsd + convertedAmountUsd).toFixed(2) })
+        .where(eq(walletsTable.userId, req.userId!));
+
+      await tx.insert(transactionsTable).values({
+        userId: req.userId!,
+        type: "CONVERSION",
+        amount: amountNum.toFixed(2),
+        currency: String(fromCurrency),
+        amountUsd: amountUsd.toFixed(2),
+        status: "COMPLETED",
+        paymentMethod: "SYSTEM",
+        description: `Converted ${amountNum} ${fromCurrency} → ${convertedAmount.toFixed(6)} ${toCurrency} (fee: $${fee.toFixed(2)})`,
+      });
+    });
+
+    res.json({
+      success: true,
+      convertedAmount: parseFloat(convertedAmount.toFixed(6)),
+      fromCurrency: String(fromCurrency),
+      toCurrency: String(toCurrency),
+      rate: toRate / fromRate,
+      fee: parseFloat(fee.toFixed(2)),
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : "";
+    if (msg === "WALLET_NOT_FOUND") {
+      res.status(400).json({ error: "Bad Request", message: "Wallet not found" });
+    } else if (msg === "INSUFFICIENT_FUNDS") {
+      res.status(400).json({ error: "Bad Request", message: "Insufficient funds for conversion" });
+    } else {
+      console.error("Conversion error:", err);
+      res.status(500).json({ error: "Internal Server Error", message: "Conversion failed" });
+    }
+  }
 });
 
 export default router;

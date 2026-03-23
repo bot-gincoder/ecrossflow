@@ -1,4 +1,4 @@
-import { pgTable, varchar, integer, numeric, text, uuid, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, numeric, text, uuid, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -39,7 +39,10 @@ export const boardParticipantsTable = pgTable("board_participants", {
   amountPaid: numeric("amount_paid", { precision: 10, scale: 2 }),
   paidAt: timestamp("paid_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  uniqueIndex("uq_board_participant_user_instance").on(t.boardInstanceId, t.userId),
+  uniqueIndex("uq_board_participant_position").on(t.boardInstanceId, t.role, t.position),
+]);
 
 export const insertBoardSchema = createInsertSchema(boardsTable);
 export const insertBoardInstanceSchema = createInsertSchema(boardInstancesTable).omit({ id: true, createdAt: true });
