@@ -5,10 +5,9 @@
  * Ecrossflow API specification
  * OpenAPI spec version: 0.1.0
  */
-import type { AdminDeposit } from "./adminDeposit";
+import type { AdminBoardInstance } from "./adminBoardInstance";
 
-export interface AdminDepositListResponse {
-  deposits: AdminDeposit[];
+export interface AdminBoardListResponse {
+  instances: AdminBoardInstance[];
   total: number;
-  overdueCount: number;
 }

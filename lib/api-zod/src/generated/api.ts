@@ -575,6 +575,47 @@ export const AdjustUserBalanceResponse = zod.object({
 });
 
 /**
+ * @summary Get detailed user profile including boards and recent transactions
+ */
+export const GetAdminUserDetailParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const GetAdminUserDetailResponse = zod.object({
+  id: zod.string(),
+  username: zod.string(),
+  email: zod.string(),
+  firstName: zod.string(),
+  lastName: zod.string(),
+  phone: zod.string().nullish(),
+  status: zod.string(),
+  role: zod.string(),
+  walletBalance: zod.number(),
+  referralCode: zod.string().nullish(),
+  totalReferrals: zod.number(),
+  currentBoard: zod.string().nullish(),
+  createdAt: zod.date(),
+  recentTransactions: zod.array(
+    zod.object({
+      id: zod.string(),
+      type: zod.string(),
+      amount: zod.number(),
+      currency: zod.string(),
+      status: zod.string(),
+      createdAt: zod.date(),
+    }),
+  ),
+  boardParticipations: zod.array(
+    zod.object({
+      boardId: zod.string(),
+      instanceNumber: zod.number(),
+      position: zod.string(),
+      joinedAt: zod.date(),
+    }),
+  ),
+});
+
+/**
  * @summary Get pending manual deposits (Moncash/Natcash)
  */
 export const GetPendingDepositsResponse = zod.object({
@@ -590,9 +631,11 @@ export const GetPendingDepositsResponse = zod.object({
       reference: zod.string().nullish(),
       screenshotUrl: zod.string().nullish(),
       createdAt: zod.date(),
+      overdue: zod.boolean(),
     }),
   ),
   total: zod.number(),
+  overdueCount: zod.number(),
 });
 
 /**
@@ -619,4 +662,106 @@ export const RejectDepositBody = zod.object({
 
 export const RejectDepositResponse = zod.object({
   message: zod.string(),
+});
+
+/**
+ * @summary Get pending withdrawal requests
+ */
+export const GetPendingWithdrawalsResponse = zod.object({
+  withdrawals: zod.array(
+    zod.object({
+      id: zod.string(),
+      userId: zod.string(),
+      username: zod.string(),
+      amount: zod.number(),
+      currency: zod.string(),
+      paymentMethod: zod.string(),
+      destination: zod.string().nullish(),
+      createdAt: zod.date(),
+      overdue: zod.boolean(),
+    }),
+  ),
+  total: zod.number(),
+  overdueCount: zod.number(),
+});
+
+/**
+ * @summary Approve a pending withdrawal
+ */
+export const ApproveWithdrawalParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const ApproveWithdrawalResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary Reject a pending withdrawal
+ */
+export const RejectWithdrawalParams = zod.object({
+  id: zod.coerce.string(),
+});
+
+export const RejectWithdrawalBody = zod.object({
+  reason: zod.string(),
+});
+
+export const RejectWithdrawalResponse = zod.object({
+  message: zod.string(),
+});
+
+/**
+ * @summary Get all active board instances (admin view)
+ */
+export const GetAdminBoardsResponse = zod.object({
+  instances: zod.array(
+    zod.object({
+      id: zod.string(),
+      boardId: zod.string(),
+      instanceNumber: zod.number(),
+      status: zod.string(),
+      slotsFilled: zod.number(),
+      totalCollected: zod.number(),
+      rankerUsername: zod.string().nullish(),
+      createdAt: zod.date(),
+      completedAt: zod.date().nullish(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Get platform aggregated reports
+ */
+export const getAdminReportsQueryPeriodDefault = `30d`;
+
+export const GetAdminReportsQueryParams = zod.object({
+  period: zod
+    .enum(["7d", "30d", "90d", "all"])
+    .default(getAdminReportsQueryPeriodDefault),
+});
+
+export const GetAdminReportsResponse = zod.object({
+  period: zod.string(),
+  totalRevenue: zod.number(),
+  totalDeposits: zod.number(),
+  totalWithdrawals: zod.number(),
+  newUsers: zod.number(),
+  completedBoards: zod.number(),
+  boardRevenue: zod.array(
+    zod.object({
+      boardId: zod.string(),
+      totalCollected: zod.number(),
+      completedInstances: zod.number(),
+      activeInstances: zod.number(),
+    }),
+  ),
+  userGrowth: zod.array(
+    zod.object({
+      date: zod.string(),
+      newUsers: zod.number(),
+      activeUsers: zod.number(),
+    }),
+  ),
 });

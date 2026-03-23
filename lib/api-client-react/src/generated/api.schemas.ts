@@ -390,6 +390,40 @@ export interface AdminUserListResponse {
   totalPages: number;
 }
 
+export type AdminUserDetailRecentTransactionsItem = {
+  id: string;
+  type: string;
+  amount: number;
+  currency: string;
+  status: string;
+  createdAt: string;
+};
+
+export type AdminUserDetailBoardParticipationsItem = {
+  boardId: string;
+  instanceNumber: number;
+  position: string;
+  joinedAt: string;
+};
+
+export interface AdminUserDetail {
+  id: string;
+  username: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  phone?: string | null;
+  status: string;
+  role: string;
+  walletBalance: number;
+  referralCode?: string | null;
+  totalReferrals: number;
+  currentBoard?: string | null;
+  createdAt: string;
+  recentTransactions: AdminUserDetailRecentTransactionsItem[];
+  boardParticipations: AdminUserDetailBoardParticipationsItem[];
+}
+
 export interface AdjustBalanceRequest {
   amount: number;
   note: string;
@@ -406,15 +440,76 @@ export interface AdminDeposit {
   reference?: string | null;
   screenshotUrl?: string | null;
   createdAt: string;
+  overdue: boolean;
 }
 
 export interface AdminDepositListResponse {
   deposits: AdminDeposit[];
   total: number;
+  overdueCount: number;
 }
 
 export interface RejectDepositRequest {
   reason: string;
+}
+
+export interface AdminWithdrawal {
+  id: string;
+  userId: string;
+  username: string;
+  amount: number;
+  currency: string;
+  paymentMethod: string;
+  destination?: string | null;
+  createdAt: string;
+  overdue: boolean;
+}
+
+export interface AdminWithdrawalListResponse {
+  withdrawals: AdminWithdrawal[];
+  total: number;
+  overdueCount: number;
+}
+
+export interface AdminBoardInstance {
+  id: string;
+  boardId: string;
+  instanceNumber: number;
+  status: string;
+  slotsFilled: number;
+  totalCollected: number;
+  rankerUsername?: string | null;
+  createdAt: string;
+  completedAt?: string | null;
+}
+
+export interface AdminBoardListResponse {
+  instances: AdminBoardInstance[];
+  total: number;
+}
+
+export interface AdminReportGrowthItem {
+  date: string;
+  newUsers: number;
+  activeUsers: number;
+}
+
+export interface AdminReportBoardRevenue {
+  boardId: string;
+  totalCollected: number;
+  completedInstances: number;
+  activeInstances: number;
+}
+
+export interface AdminReports {
+  period: string;
+  totalRevenue: number;
+  totalDeposits: number;
+  totalWithdrawals: number;
+  newUsers: number;
+  completedBoards: number;
+  boardRevenue: AdminReportBoardRevenue[];
+  userGrowth: AdminReportGrowthItem[];
 }
 
 export type VerifyReferralParams = {
@@ -463,3 +558,17 @@ export type GetAdminUsersParams = {
   search?: string;
   status?: string;
 };
+
+export type GetAdminReportsParams = {
+  period?: GetAdminReportsPeriod;
+};
+
+export type GetAdminReportsPeriod =
+  (typeof GetAdminReportsPeriod)[keyof typeof GetAdminReportsPeriod];
+
+export const GetAdminReportsPeriod = {
+  "7d": "7d",
+  "30d": "30d",
+  "90d": "90d",
+  all: "all",
+} as const;

@@ -6,16 +6,14 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface AdminDeposit {
+export interface AdminWithdrawal {
   id: string;
   userId: string;
   username: string;
   amount: number;
   currency: string;
-  amountHtg?: number | null;
   paymentMethod: string;
-  reference?: string | null;
-  screenshotUrl?: string | null;
+  destination?: string | null;
   createdAt: Date;
   overdue: boolean;
 }

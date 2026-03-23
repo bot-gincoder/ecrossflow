@@ -691,6 +691,29 @@ paths:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
 
+  /admin/users/{id}:
+    get:
+      operationId: getAdminUserDetail
+      tags: [admin]
+      summary: Get detailed user profile including boards and recent transactions
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUserDetail"
+        "404":
+          description: User not found
+
   /admin/deposits/pending:
     get:
       operationId: getPendingDeposits
@@ -753,6 +776,106 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MessageResponse"
+
+  /admin/withdrawals/pending:
+    get:
+      operationId: getPendingWithdrawals
+      tags: [admin]
+      summary: Get pending withdrawal requests
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pending withdrawals
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminWithdrawalListResponse"
+
+  /admin/withdrawals/{id}/approve:
+    put:
+      operationId: approveWithdrawal
+      tags: [admin]
+      summary: Approve a pending withdrawal
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Withdrawal approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/withdrawals/{id}/reject:
+    put:
+      operationId: rejectWithdrawal
+      tags: [admin]
+      summary: Reject a pending withdrawal
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectDepositRequest"
+      responses:
+        "200":
+          description: Withdrawal rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageResponse"
+
+  /admin/boards:
+    get:
+      operationId: getAdminBoards
+      tags: [admin]
+      summary: Get all active board instances (admin view)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Board instances
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminBoardListResponse"
+
+  /admin/reports:
+    get:
+      operationId: getAdminReports
+      tags: [admin]
+      summary: Get platform aggregated reports
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, all]
+            default: 30d
+      responses:
+        "200":
+          description: Platform reports
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminReports"
 
 components:
   securitySchemes:
@@ -1501,6 +1624,97 @@ components:
         - walletBalance
         - createdAt
 
+    AdminUserDetail:
+      type: object
+      properties:
+        id:
+          type: string
+        username:
+          type: string
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+        phone:
+          type: string
+          nullable: true
+        status:
+          type: string
+        role:
+          type: string
+        walletBalance:
+          type: number
+        referralCode:
+          type: string
+          nullable: true
+        totalReferrals:
+          type: integer
+        currentBoard:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        recentTransactions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              type:
+                type: string
+              amount:
+                type: number
+              currency:
+                type: string
+              status:
+                type: string
+              createdAt:
+                type: string
+                format: date-time
+            required:
+              - id
+              - type
+              - amount
+              - currency
+              - status
+              - createdAt
+        boardParticipations:
+          type: array
+          items:
+            type: object
+            properties:
+              boardId:
+                type: string
+              instanceNumber:
+                type: integer
+              position:
+                type: string
+              joinedAt:
+                type: string
+                format: date-time
+            required:
+              - boardId
+              - instanceNumber
+              - position
+              - joinedAt
+      required:
+        - id
+        - username
+        - email
+        - firstName
+        - lastName
+        - status
+        - role
+        - walletBalance
+        - totalReferrals
+        - createdAt
+        - recentTransactions
+        - boardParticipations
+
     AdjustBalanceRequest:
       type: object
       properties:
@@ -1521,9 +1735,12 @@ components:
             $ref: "#/components/schemas/AdminDeposit"
         total:
           type: integer
+        overdueCount:
+          type: integer
       required:
         - deposits
         - total
+        - overdueCount
 
     AdminDeposit:
       type: object
@@ -1552,6 +1769,8 @@ components:
         createdAt:
           type: string
           format: date-time
+        overdue:
+          type: boolean
       required:
         - id
         - userId
@@ -1560,6 +1779,7 @@ components:
         - currency
         - paymentMethod
         - createdAt
+        - overdue
 
     RejectDepositRequest:
       type: object
@@ -1568,3 +1788,163 @@ components:
           type: string
       required:
         - reason
+
+    AdminWithdrawal:
+      type: object
+      properties:
+        id:
+          type: string
+        userId:
+          type: string
+        username:
+          type: string
+        amount:
+          type: number
+        currency:
+          type: string
+        paymentMethod:
+          type: string
+        destination:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        overdue:
+          type: boolean
+      required:
+        - id
+        - userId
+        - username
+        - amount
+        - currency
+        - paymentMethod
+        - createdAt
+        - overdue
+
+    AdminWithdrawalListResponse:
+      type: object
+      properties:
+        withdrawals:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminWithdrawal"
+        total:
+          type: integer
+        overdueCount:
+          type: integer
+      required:
+        - withdrawals
+        - total
+        - overdueCount
+
+    AdminBoardInstance:
+      type: object
+      properties:
+        id:
+          type: string
+        boardId:
+          type: string
+        instanceNumber:
+          type: integer
+        status:
+          type: string
+        slotsFilled:
+          type: integer
+        totalCollected:
+          type: number
+        rankerUsername:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - boardId
+        - instanceNumber
+        - status
+        - slotsFilled
+        - totalCollected
+        - createdAt
+
+    AdminBoardListResponse:
+      type: object
+      properties:
+        instances:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminBoardInstance"
+        total:
+          type: integer
+      required:
+        - instances
+        - total
+
+    AdminReportGrowthItem:
+      type: object
+      properties:
+        date:
+          type: string
+        newUsers:
+          type: integer
+        activeUsers:
+          type: integer
+      required:
+        - date
+        - newUsers
+        - activeUsers
+
+    AdminReportBoardRevenue:
+      type: object
+      properties:
+        boardId:
+          type: string
+        totalCollected:
+          type: number
+        completedInstances:
+          type: integer
+        activeInstances:
+          type: integer
+      required:
+        - boardId
+        - totalCollected
+        - completedInstances
+        - activeInstances
+
+    AdminReports:
+      type: object
+      properties:
+        period:
+          type: string
+        totalRevenue:
+          type: number
+        totalDeposits:
+          type: number
+        totalWithdrawals:
+          type: number
+        newUsers:
+          type: integer
+        completedBoards:
+          type: integer
+        boardRevenue:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminReportBoardRevenue"
+        userGrowth:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminReportGrowthItem"
+      required:
+        - period
+        - totalRevenue
+        - totalDeposits
+        - totalWithdrawals
+        - newUsers
+        - completedBoards
+        - boardRevenue
+        - userGrowth

@@ -6,16 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface AdminDeposit {
+export type AdminUserDetailRecentTransactionsItem = {
   id: string;
-  userId: string;
-  username: string;
+  type: string;
   amount: number;
   currency: string;
-  amountHtg?: number | null;
-  paymentMethod: string;
-  reference?: string | null;
-  screenshotUrl?: string | null;
+  status: string;
   createdAt: Date;
-  overdue: boolean;
-}
+};

@@ -1,4 +1,4 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, useLocation } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -32,6 +32,12 @@ const queryClient = new QueryClient({
     }
   }
 });
+
+function RedirectTo({ to }: { to: string }) {
+  const [, navigate] = useLocation();
+  useEffect(() => { navigate(to); }, [to]);
+  return null;
+}
 
 function AppSetup({ children }: { children: React.ReactNode }) {
   const { token, theme } = useAppStore();
@@ -68,6 +74,11 @@ function Router() {
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/profile" component={ProfilePage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/admin/users"><RedirectTo to="/admin?tab=users" /></Route>
+      <Route path="/admin/payments"><RedirectTo to="/admin?tab=deposits" /></Route>
+      <Route path="/admin/boards"><RedirectTo to="/admin?tab=boards" /></Route>
+      <Route path="/admin/reports"><RedirectTo to="/admin?tab=reports" /></Route>
+      <Route path="/admin/withdrawals"><RedirectTo to="/admin?tab=withdrawals" /></Route>
       <Route path="/about" component={AboutPage} />
       <Route path="/how-it-works" component={HowItWorksPage} />
       <Route path="/terms" component={TermsPage} />

@@ -18,9 +18,13 @@ import type {
 
 import type {
   AdjustBalanceRequest,
+  AdminBoardListResponse,
   AdminDepositListResponse,
+  AdminReports,
   AdminStats,
+  AdminUserDetail,
   AdminUserListResponse,
+  AdminWithdrawalListResponse,
   AuthResponse,
   BoardInstance,
   BoardPaymentResponse,
@@ -31,6 +35,7 @@ import type {
   ErrorResponse,
   ExchangeRates,
   FinancialReport,
+  GetAdminReportsParams,
   GetAdminUsersParams,
   GetBoards200,
   GetMyBoardStatus200,
@@ -2537,6 +2542,93 @@ export const useAdjustUserBalance = <
 };
 
 /**
+ * @summary Get detailed user profile including boards and recent transactions
+ */
+export const getGetAdminUserDetailUrl = (id: string) => {
+  return `/api/admin/users/${id}`;
+};
+
+export const getAdminUserDetail = async (
+  id: string,
+  options?: RequestInit,
+): Promise<AdminUserDetail> => {
+  return customFetch<AdminUserDetail>(getGetAdminUserDetailUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminUserDetailQueryKey = (id: string) => {
+  return [`/api/admin/users/${id}`] as const;
+};
+
+export const getGetAdminUserDetailQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminUserDetail>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminUserDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAdminUserDetailQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getAdminUserDetail>>
+  > = ({ signal }) => getAdminUserDetail(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminUserDetail>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminUserDetailQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminUserDetail>>
+>;
+export type GetAdminUserDetailQueryError = ErrorType<void>;
+
+/**
+ * @summary Get detailed user profile including boards and recent transactions
+ */
+
+export function useGetAdminUserDetail<
+  TData = Awaited<ReturnType<typeof getAdminUserDetail>>,
+  TError = ErrorType<void>,
+>(
+  id: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminUserDetail>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminUserDetailQueryOptions(id, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
  * @summary Get pending manual deposits (Moncash/Natcash)
  */
 export const getGetPendingDepositsUrl = () => {
@@ -2781,3 +2873,421 @@ export const useRejectDeposit = <
 > => {
   return useMutation(getRejectDepositMutationOptions(options));
 };
+
+/**
+ * @summary Get pending withdrawal requests
+ */
+export const getGetPendingWithdrawalsUrl = () => {
+  return `/api/admin/withdrawals/pending`;
+};
+
+export const getPendingWithdrawals = async (
+  options?: RequestInit,
+): Promise<AdminWithdrawalListResponse> => {
+  return customFetch<AdminWithdrawalListResponse>(
+    getGetPendingWithdrawalsUrl(),
+    {
+      ...options,
+      method: "GET",
+    },
+  );
+};
+
+export const getGetPendingWithdrawalsQueryKey = () => {
+  return [`/api/admin/withdrawals/pending`] as const;
+};
+
+export const getGetPendingWithdrawalsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPendingWithdrawals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPendingWithdrawals>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetPendingWithdrawalsQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPendingWithdrawals>>
+  > = ({ signal }) => getPendingWithdrawals({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPendingWithdrawals>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPendingWithdrawalsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPendingWithdrawals>>
+>;
+export type GetPendingWithdrawalsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get pending withdrawal requests
+ */
+
+export function useGetPendingWithdrawals<
+  TData = Awaited<ReturnType<typeof getPendingWithdrawals>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getPendingWithdrawals>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPendingWithdrawalsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Approve a pending withdrawal
+ */
+export const getApproveWithdrawalUrl = (id: string) => {
+  return `/api/admin/withdrawals/${id}/approve`;
+};
+
+export const approveWithdrawal = async (
+  id: string,
+  options?: RequestInit,
+): Promise<MessageResponse> => {
+  return customFetch<MessageResponse>(getApproveWithdrawalUrl(id), {
+    ...options,
+    method: "PUT",
+  });
+};
+
+export const getApproveWithdrawalMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approveWithdrawal>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof approveWithdrawal>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  const mutationKey = ["approveWithdrawal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof approveWithdrawal>>,
+    { id: string }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return approveWithdrawal(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ApproveWithdrawalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof approveWithdrawal>>
+>;
+
+export type ApproveWithdrawalMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Approve a pending withdrawal
+ */
+export const useApproveWithdrawal = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof approveWithdrawal>>,
+    TError,
+    { id: string },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof approveWithdrawal>>,
+  TError,
+  { id: string },
+  TContext
+> => {
+  return useMutation(getApproveWithdrawalMutationOptions(options));
+};
+
+/**
+ * @summary Reject a pending withdrawal
+ */
+export const getRejectWithdrawalUrl = (id: string) => {
+  return `/api/admin/withdrawals/${id}/reject`;
+};
+
+export const rejectWithdrawal = async (
+  id: string,
+  rejectDepositRequest: RejectDepositRequest,
+  options?: RequestInit,
+): Promise<MessageResponse> => {
+  return customFetch<MessageResponse>(getRejectWithdrawalUrl(id), {
+    ...options,
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(rejectDepositRequest),
+  });
+};
+
+export const getRejectWithdrawalMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rejectWithdrawal>>,
+    TError,
+    { id: string; data: BodyType<RejectDepositRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof rejectWithdrawal>>,
+  TError,
+  { id: string; data: BodyType<RejectDepositRequest> },
+  TContext
+> => {
+  const mutationKey = ["rejectWithdrawal"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof rejectWithdrawal>>,
+    { id: string; data: BodyType<RejectDepositRequest> }
+  > = (props) => {
+    const { id, data } = props ?? {};
+
+    return rejectWithdrawal(id, data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type RejectWithdrawalMutationResult = NonNullable<
+  Awaited<ReturnType<typeof rejectWithdrawal>>
+>;
+export type RejectWithdrawalMutationBody = BodyType<RejectDepositRequest>;
+export type RejectWithdrawalMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Reject a pending withdrawal
+ */
+export const useRejectWithdrawal = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof rejectWithdrawal>>,
+    TError,
+    { id: string; data: BodyType<RejectDepositRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof rejectWithdrawal>>,
+  TError,
+  { id: string; data: BodyType<RejectDepositRequest> },
+  TContext
+> => {
+  return useMutation(getRejectWithdrawalMutationOptions(options));
+};
+
+/**
+ * @summary Get all active board instances (admin view)
+ */
+export const getGetAdminBoardsUrl = () => {
+  return `/api/admin/boards`;
+};
+
+export const getAdminBoards = async (
+  options?: RequestInit,
+): Promise<AdminBoardListResponse> => {
+  return customFetch<AdminBoardListResponse>(getGetAdminBoardsUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminBoardsQueryKey = () => {
+  return [`/api/admin/boards`] as const;
+};
+
+export const getGetAdminBoardsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminBoards>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminBoards>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAdminBoardsQueryKey();
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAdminBoards>>> = ({
+    signal,
+  }) => getAdminBoards({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminBoards>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminBoardsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminBoards>>
+>;
+export type GetAdminBoardsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get all active board instances (admin view)
+ */
+
+export function useGetAdminBoards<
+  TData = Awaited<ReturnType<typeof getAdminBoards>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminBoards>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminBoardsQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Get platform aggregated reports
+ */
+export const getGetAdminReportsUrl = (params?: GetAdminReportsParams) => {
+  const normalizedParams = new URLSearchParams();
+
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined) {
+      normalizedParams.append(key, value === null ? "null" : value.toString());
+    }
+  });
+
+  const stringifiedParams = normalizedParams.toString();
+
+  return stringifiedParams.length > 0
+    ? `/api/admin/reports?${stringifiedParams}`
+    : `/api/admin/reports`;
+};
+
+export const getAdminReports = async (
+  params?: GetAdminReportsParams,
+  options?: RequestInit,
+): Promise<AdminReports> => {
+  return customFetch<AdminReports>(getGetAdminReportsUrl(params), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetAdminReportsQueryKey = (params?: GetAdminReportsParams) => {
+  return [`/api/admin/reports`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetAdminReportsQueryOptions = <
+  TData = Awaited<ReturnType<typeof getAdminReports>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAdminReportsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminReports>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetAdminReportsQueryKey(params);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof getAdminReports>>> = ({
+    signal,
+  }) => getAdminReports(params, { signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getAdminReports>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetAdminReportsQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getAdminReports>>
+>;
+export type GetAdminReportsQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Get platform aggregated reports
+ */
+
+export function useGetAdminReports<
+  TData = Awaited<ReturnType<typeof getAdminReports>>,
+  TError = ErrorType<unknown>,
+>(
+  params?: GetAdminReportsParams,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getAdminReports>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetAdminReportsQueryOptions(params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}

@@ -7,11 +7,21 @@
  */
 
 export * from "./adjustBalanceRequest";
+export * from "./adminBoardInstance";
+export * from "./adminBoardListResponse";
 export * from "./adminDeposit";
 export * from "./adminDepositListResponse";
+export * from "./adminReportBoardRevenue";
+export * from "./adminReportGrowthItem";
+export * from "./adminReports";
 export * from "./adminStats";
 export * from "./adminUser";
+export * from "./adminUserDetail";
+export * from "./adminUserDetailBoardParticipationsItem";
+export * from "./adminUserDetailRecentTransactionsItem";
 export * from "./adminUserListResponse";
+export * from "./adminWithdrawal";
+export * from "./adminWithdrawalListResponse";
 export * from "./authResponse";
 export * from "./board";
 export * from "./boardInstance";
@@ -29,6 +39,8 @@ export * from "./exchangeRates";
 export * from "./exchangeRatesRates";
 export * from "./financialReport";
 export * from "./financialReportBoardProgressItem";
+export * from "./getAdminReportsParams";
+export * from "./getAdminReportsPeriod";
 export * from "./getAdminUsersParams";
 export * from "./getBoards200";
 export * from "./getMyBoardStatus200";

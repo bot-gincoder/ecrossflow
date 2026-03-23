@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useAppStore } from '@/hooks/use-store';
 import type { Theme, Language } from '@/hooks/use-store';
-import { useGetMe, useLogout, getGetMeQueryKey } from '@workspace/api-client-react';
+import { useGetMe, useLogout, getGetMeQueryKey, useGetUnreadCount } from '@workspace/api-client-react';
 
 const NavLink = ({ href, icon: Icon, children, currentPath }: { href: string, icon: React.ElementType, children: ReactNode, currentPath: string }) => {
   const isActive = currentPath === href || (href !== '/' && currentPath.startsWith(href));
@@ -50,6 +50,10 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   });
 
   const { mutate: doLogout } = useLogout();
+  const { data: unreadData } = useGetUnreadCount({
+    query: { enabled: !!token, refetchInterval: 30_000 }
+  });
+  const unreadCount = unreadData?.count ?? 0;
 
   useEffect(() => {
     // Apply theme on mount
@@ -82,7 +86,10 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   const links = requireAdmin ? [
     { href: '/admin', icon: BarChart, label: 'Vue globale' },
     { href: '/admin?tab=users', icon: Users, label: 'Utilisateurs' },
-    { href: '/admin?tab=deposits', icon: CreditCard, label: 'Dépôts en attente' },
+    { href: '/admin?tab=deposits', icon: CreditCard, label: 'Dépôts' },
+    { href: '/admin?tab=withdrawals', icon: Wallet, label: 'Retraits' },
+    { href: '/admin?tab=boards', icon: Layers, label: 'Boards' },
+    { href: '/admin?tab=reports', icon: History, label: 'Rapports' },
     { href: '/dashboard', icon: LayoutDashboard, label: 'Quitter Admin' },
   ] : [
     { href: '/dashboard', icon: LayoutDashboard, label: t('nav.dashboard') },
@@ -174,7 +181,11 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
         <div className="flex items-center gap-3">
           <Link href="/notifications" className="relative p-2 text-muted-foreground">
             <Bell className="w-5 h-5" />
-            <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-destructive animate-pulse" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] rounded-full bg-destructive text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-sm">
+                {unreadCount > 99 ? '99+' : unreadCount}
+              </span>
+            )}
           </Link>
           <button onClick={() => setMobileMenuOpen(true)} className="p-2">
             <Menu className="w-6 h-6" />
@@ -223,7 +234,11 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
            <div className="pointer-events-auto flex items-center gap-4">
               <Link href="/notifications" className="relative p-3 bg-card/50 backdrop-blur-md rounded-full border border-border/50 hover:bg-card hover:border-primary/50 transition-all shadow-sm">
                 <Bell className="w-5 h-5" />
-                <span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-destructive shadow-[0_0_10px_rgba(255,0,0,0.8)]" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[20px] h-[20px] rounded-full bg-destructive text-white text-[10px] font-bold flex items-center justify-center px-1 shadow-[0_0_10px_rgba(255,0,0,0.6)]">
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </span>
+                )}
               </Link>
            </div>
         </div>

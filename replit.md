@@ -62,14 +62,24 @@ Ecrossflow is a pyramid-based community donation platform ("plateforme numériqu
 ### 4 Themes
 - Light, Dark, Midnight, Gold (via CSS custom properties + class on `<html>`)
 
-### Admin Dashboard
-- User management (activate/suspend)
-- Pending deposits approval/rejection
-- Platform statistics
+### Admin Dashboard (/admin)
+- **Overview tab**: Real-time KPIs (users, active boards, pending deposits/withdrawals, platform revenue)
+- **Users tab**: Searchable/filterable user list with activate/suspend/adjust-balance actions
+- **Deposits tab**: Pending Moncash/Natcash deposits with screenshot preview, approve/reject with notification
+- **Withdrawals tab**: Pending withdrawal requests with approve/reject (auto-refund on rejection)
+- **Boards tab**: All board instances with status, slots filled, total collected, ranker username
+- **Reports tab**: Platform revenue, deposits/withdrawals totals, user growth chart, board revenue breakdown with CSV export
+- Alerts shown when pending deposits > 24h or withdrawals pending
+
+### Notifications System (/notifications)
+- Real-time bell icon badge showing unread count (polls every 30s)
+- Notification centre: chronological list with filter tabs (Toutes/Non lues/Finance/Sécurité)
+- Auto-notifications created for: deposit approved/rejected, withdrawal approved/rejected, account activated/suspended, balance adjusted
+- Mark-as-read on click, mark-all-read button
 
 ## Admin Account
 - Email: admin@ecrossflow.com
-- Password: AdminPass2024! (reset via DB, ADMIN_SEED_PASSWORD env var needed to re-seed)
+- Password: Admin123! (test password set for development)
 - Referral Code: ECFADMIN0
 
 ## Database Schema
@@ -111,8 +121,26 @@ All routes prefixed with `/api`
 - POST `/api/wallet/withdraw` — Create withdrawal
 - POST `/api/wallet/convert` — Convert currency
 
-### Transactions, Referrals, Notifications, Admin
-Standard CRUD endpoints as per OpenAPI spec.
+### Notifications
+- GET `/api/notifications` — List (filter: all/unread/financial/security, page)
+- GET `/api/notifications/unread-count` — Unread badge count
+- PUT `/api/notifications/:id/read` — Mark one as read
+- PUT `/api/notifications/read-all` — Mark all as read
+
+### Admin (all require ADMIN role)
+- GET `/api/admin/stats` — Platform KPIs
+- GET `/api/admin/users` — User list (search, status filter, pagination)
+- PUT `/api/admin/users/:id/activate` — Activate user + notification
+- PUT `/api/admin/users/:id/suspend` — Suspend user + notification
+- POST `/api/admin/users/:id/adjust-balance` — Adjust wallet balance + notification
+- GET `/api/admin/deposits/pending` — Pending Moncash/Natcash deposits
+- PUT `/api/admin/deposits/:id/approve` — Approve deposit + credit wallet + notification
+- PUT `/api/admin/deposits/:id/reject` — Reject deposit + notification
+- GET `/api/admin/withdrawals/pending` — Pending withdrawals
+- PUT `/api/admin/withdrawals/:id/approve` — Approve withdrawal + notification
+- PUT `/api/admin/withdrawals/:id/reject` — Reject withdrawal + refund wallet + notification
+- GET `/api/admin/boards` — All board instances (with ranker info)
+- GET `/api/admin/reports` — Aggregated reports (period: 7d/30d/90d/all), includes board revenue breakdown + user growth
 
 ## Environment Variables
 - `DATABASE_URL` — PostgreSQL connection string (Replit managed)
