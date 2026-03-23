@@ -1,0 +1,1069 @@
+# 🌐 ECROSSFLOW
+### Plateforme Numérique de Don & Bourse Virtuelle integré- sytem Pyramidale
+
+---
+
+## 0. VISION GLOBALE DU PRODUIT
+
+Ecrossflow est une plateforme numérique de don communautaire à structure pyramidale inspirée du modèle « Gift of Legacy ». Elle combine :
+- Un système de boards progressifs (F → S) avec rôles internes
+- Une bourse virtuelle multi-devises par utilisateur
+- Un système de gestion de fonds (dépôt, retrait, paiement de boards)
+- Un historique de transactions complet et des rapports détaillés
+- Un système de parrainage et de bonus
+- Un système de numérotation de comptes validés
+- Une interface complète : multi-langue, multi-thème, mobile-first, animations riches
+
+Stack technique recommandé :
+- **Frontend** : Next.js 14 (App Router) + TypeScript + Tailwind CSS + Framer Motion
+- **Backend / BDD** : Supabase (Auth, PostgreSQL, Realtime, Storage, Edge Functions)
+- **Paiements** : Stripe (carte/bank/PayPal), CoinGate ou NOWPayments (crypto), intégration manuelle Moncash & Natcash (API ou webhook SMS/USSD)
+- **Auth** : Supabase Auth + Google OAuth + OTP email/SMS (Twilio ou Supabase built-in)
+- **I18n** : next-intl ou i18next (FR, EN, ES, HT — créole haïtien)
+- **Thèmes** : next-themes (Light, Dark, Midnight Blue, Gold/Luxury)
+- **Devises** : API taux de change (Open Exchange Rates ou Fixer.io) + HTG fixe ($1 = 140 gourdes)
+
+---
+
+## 1. DESIGN SYSTEM & IDENTITÉ VISUELLE
+
+### 1.1 Philosophie Design
+- Style : **Luxury Fintech Futuriste** — épuré, moderne, premium
+- Inspiration : Robinhood meets Web3 Dashboard meets African fintech (Wave, Eversend)
+- Pas de design générique. Chaque pixel doit inspirer confiance, exclusivité et progression
+- Sensation de "montée en grade" — le design doit évoluer visuellement à chaque board franchi
+
+### 1.2 Typographie
+- Display / Titres : `Clash Display` ou `Cabinet Grotesk` (bold, geometric)
+- Corps / UI : `DM Sans` (lisible, propre)
+- Données / Nombres : `JetBrains Mono` (monospace pour montants et codes)
+- Chargement via Google Fonts ou Fontsource (self-hosted)
+
+### 1.3 Palette de couleurs (variables CSS globales)
+
+#### Thème Light (défaut)
+```css
+--bg-primary: #F8F7F4;
+--bg-card: #FFFFFF;
+--text-primary: #0D0D0D;
+--text-secondary: #6B6B6B;
+--accent: #00C48C;         /* Vert émeraude — croissance, don */
+--accent-secondary: #FF6B35; /* Orange vif — action, chaleur */
+--border: #E8E8E3;
+--gold: #D4AF37;           /* Pour badges et rangs */
+```
+
+#### Thème Dark
+```css
+--bg-primary: #0A0A0F;
+--bg-card: #13131A;
+--text-primary: #F0F0F0;
+--text-secondary: #8888AA;
+--accent: #00FFB2;
+--accent-secondary: #FF6B35;
+--border: #222233;
+--gold: #FFD700;
+```
+
+#### Thème Midnight Blue
+```css
+--bg-primary: #05091F;
+--bg-card: #0B1030;
+--text-primary: #E8F0FF;
+--accent: #4FC3F7;
+--accent-secondary: #7C4DFF;
+--gold: #FFD700;
+```
+
+#### Thème Gold/Luxury
+```css
+--bg-primary: #1A1200;
+--bg-card: #231A00;
+--text-primary: #FFF8DC;
+--accent: #D4AF37;
+--accent-secondary: #FF6B35;
+--border: #3D2E00;
+```
+
+### 1.4 Composants UI Clés
+- Cards avec glassmorphism subtil (backdrop-filter: blur 12px, border 1px semi-transparent)
+- Boutons avec micro-animations au hover (scale 1.02 + glow matching accent)
+- Inputs avec focus ring animé (color transition 300ms)
+- Badges de rang avec gradient unique par board (F=gris, E=bronze, D=argent, C=or, B=platine, A=émeraude, S=diamant)
+- Progress bars animées (Framer Motion)
+- Toasts/notifications avec icônes personnalisées
+- Modals centrées avec overlay blur
+- Skeleton loaders sur tous les composants async
+
+### 1.5 Responsive & Mobile-First
+- Breakpoints : xs(375), sm(640), md(768), lg(1024), xl(1280), 2xl(1536)
+- Navigation mobile : Bottom Tab Bar (5 onglets max) + Hamburger pour menu complet
+- Desktop : Sidebar fixe gauche (240px) + contenu principal
+- Touch gestures : swipe pour naviguer entre boards sur mobile
+- Tap targets min 44x44px sur mobile
+- PWA-ready (manifest.json + service worker pour utilisation hors ligne partielle)
+
+---
+
+## 2. ARCHITECTURE DES PAGES
+
+### 2.1 Pages Publiques (non authentifié)
+1. **/** — Landing page principale
+2. **/about** — À propos d'Ecrossflow
+3. **/how-it-works** — Explication du système pyramidal + boards
+4. **/boards** — Tableau public des boards et statistiques globales
+5. **/auth/register** — Inscription
+6. **/auth/login** — Connexion
+7. **/auth/verify** — Vérification OTP (email ou SMS)
+8. **/auth/forgot-password** — Réinitialisation mot de passe
+9. **/legal/terms** — CGU
+10. **/legal/privacy** — Politique de confidentialité
+
+### 2.2 Pages Privées (authentifié)
+1. **/dashboard** — Tableau de bord principal
+2. **/wallet** — Bourse virtuelle (solde, dépôt, retrait, conversion)
+3. **/boards** — Vue de tous les boards, statut actuel, progression
+4. **/boards/[id]** — Détail d'un board spécifique
+5. **/history** — Historique complet de toutes les transactions
+6. **/referrals** — Programme de parrainage (lien, code, filleuls, bonus)
+7. **/profile** — Profil utilisateur et paramètres de compte
+8. **/settings** — Langue, thème, devise, notifications, sécurité
+9. **/notifications** — Centre de notifications
+10. **/support** — Support / FAQ / Contact
+
+### 2.3 Pages Admin (rôle admin)
+1. **/admin** — Dashboard admin général
+2. **/admin/users** — Gestion des utilisateurs (liste, recherche, filtres, actions)
+3. **/admin/boards** — Gestion des boards (état en temps réel, déplacement manuel si besoin)
+4. **/admin/transactions** — Toutes les transactions de la plateforme
+5. **/admin/payments** — Validation des paiements Moncash/Natcash manuels
+6. **/admin/reports** — Rapports et exports (CSV, PDF)
+7. **/admin/settings** — Paramètres globaux de la plateforme
+
+---
+
+## 3. LANDING PAGE — DÉTAIL COMPLET
+
+### Hero Section
+- Fond : mesh gradient animé (Framer Motion ou CSS keyframes) avec particules flottantes subtiles
+- Titre H1 grand (72px desktop / 42px mobile) : "**Donnez. Progressez. Gagnez.**"
+- Sous-titre : Explication en 2 lignes du concept Ecrossflow
+- 2 CTA : "Commencer maintenant" (accent vert) + "Voir comment ça marche" (outline)
+- Mockup de l'app (dashboard screenshot) en flottant à droite, animé (parallax au scroll)
+- Badge de confiance : "🔒 Sécurisé par Supabase" + "🌍 Disponible dans 4 langues"
+
+### Section "Comment ça fonctionne" (3 étapes visuelles)
+- Étape 1 : Inscrivez-vous avec votre code de parrainage
+- Étape 2 : Activez votre compte ($1 + 2 filleuls)
+- Étape 3 : Progressez dans les boards et récoltez vos gains
+- Chaque étape = card avec icône animée, numéro stylisé, description courte
+
+### Section Boards Preview
+- Frise horizontale scrollable des 7 boards (F à S)
+- Chaque board = card avec : couleur unique, montant d'entrée, gain possible, badge de rang
+- Animation d'entrée au scroll (stagger reveal de gauche à droite)
+
+### Section Témoignages / Stats
+- Compteurs animés (CountUp.js) : Total membres, Total distribué ($), Boards complétés
+- 3 témoignages fictifs (avec avatars générés, noms, pays, montant gagné)
+
+### Section Méthodes de Paiement
+- Logos de : Moncash, Natcash, Visa/Mastercard, Bitcoin/USDT, PayPal, Bank Transfer
+- Note : "Taux Moncash/Natcash : $1 = 140 HTG"
+
+### Footer
+- Logo + tagline
+- Liens : À propos, CGU, Confidentialité, Support, Réseaux sociaux
+- Sélecteur de langue (4 drapeaux : HT, FR, ES, EN)
+- Copyright + disclaimer légal
+
+---
+
+## 4. SYSTÈME D'AUTHENTIFICATION — DÉTAIL COMPLET
+
+### 4.1 Inscription
+
+**Champs du formulaire :**
+```
+- Prénom (requis)
+- Nom (requis)
+- Username (unique, minuscules, sans espaces, 3-20 chars, vérification temps réel via debounce 500ms)
+- Email (requis, validation format)
+- Téléphone (optionnel, format international E.164)
+- Mot de passe (min 8 chars, avec indicateur de force visuel : faible/moyen/fort)
+- Confirmer mot de passe
+- Code de parrainage (OBLIGATOIRE — champ avec validation en temps réel, affiche nom du parrain si valide)
+- Case à cocher CGU
+```
+
+**Google OAuth :**
+- Bouton "Continuer avec Google" (OAuth Supabase)
+- Après OAuth : si nouvel utilisateur → modal pour entrer le code de parrainage (obligatoire)
+- Le username est pré-rempli depuis le nom Google (modifiable)
+
+**Flux post-inscription :**
+1. Email de vérification envoyé → page "Vérifiez votre email"
+2. Clic sur lien → retour app → page de vérification OTP optionnelle (SMS si téléphone fourni)
+3. Compte créé en statut "PENDING" (en attente d'activation)
+4. Redirection vers onboarding
+
+**Page Onboarding (après première connexion) :**
+- Étape 1 : Bienvenue + explication du statut "En attente d'activation"
+- Étape 2 : Payer $1 pour activer (sélection méthode de paiement)
+- Étape 3 : Inviter 2 amis (affichage lien de parrainage + code personnel, boutons partage WhatsApp/Telegram/Copier)
+- Étape 4 (déblocage automatique) : Compte numéroté et activé → notification + confettis
+
+### 4.2 Connexion
+
+**Formulaire :**
+```
+- Email OU Username
+- Mot de passe
+- Case "Se souvenir de moi"
+```
+
+**Après soumission :**
+- Si 2FA activé → choix : code par email OU SMS → saisie OTP 6 chiffres (timer 60s + renvoi)
+
+**Google OAuth connexion :**
+- Même bouton → si compte existant → connexion directe → OTP si 2FA activé
+
+**Sécurité :**
+- Rate limiting : 5 tentatives → blocage 15 minutes (côté Supabase Edge Function)
+- Détection connexion depuis nouveau device → email d'alerte automatique
+- Sessions JWT avec refresh token (30 jours si "Se souvenir de moi", 24h sinon)
+
+---
+
+## 5. SYSTÈME DE BOARDS — LOGIQUE COMPLÈTE
+
+### 5.1 Structure des 7 Boards
+
+| Board | Frais Entrée | Multiplicateur | Gain Total Ranker | Déduit (Board Suivant) | Retirable |
+|-------|-------------|----------------|-------------------|------------------------|-----------|
+| F     | $2          | ×8             | $16               | $8                     | $6        |
+| E     | $8          | ×8             | $64               | $32                    | $24       |
+| D     | $32         | ×8             | $256              | $128                   | $96       |
+| C     | $128        | ×8             | $1,024            | $512                   | $384      |
+| B     | $512        | ×8             | $4,096            | $2,048                 | $1,536    |
+| A     | $2,048      | ×8             | $16,384           | $8,192                 | $6,143    |
+| S     | $8,192      | ×8             | $65,536           | –                      | ~$50,000  |
+
+**Note Board A :** Fee d'entrée = $2,050 (dont $2 de frais plateforme)
+**Note Board S :** Fee = $15,000 ; gain total = $65,536 ; après déductions le ranker sort avec ~$50,000
+
+### 5.2 Les 4 Rôles dans chaque Board
+
+```
+STARTER → CHALLENGER → LEADER → RANKER
+```
+
+**Starter :**
+- Paie $1 d'activation (une seule fois, à l'inscription)
+- Entre dans le board F comme Starter
+- Paie le fee du board au Ranker actuel (via bourse virtuelle)
+- Les fonds de 7 starters (sur 8) vont directement au Ranker
+- Le 8ème paiement couvre les frais système / prochain board
+
+**Challenger :**
+- Devient Challenger après avoir recruté/parrainé suffisamment
+- Statut intermédiaire de progression
+
+**Leader :**
+- Gère une branche de la pyramide
+- Peut voir ses sous-membres
+
+**Ranker :**
+- Position de tête du board
+- Reçoit les paiements des 7 Starters
+- Quand le board est completé (8 personnes payées) → monte automatiquement au board suivant
+- Recoit le gain, dont : une partie va vers le board suivant, le reste est retirable
+
+### 5.3 Disposition Pyramidale Visuelle
+
+Pour chaque board, afficher un arbre pyramidal :
+```
+         [RANKER]
+        /        \
+   [LEADER]    [LEADER]
+   /    \       /    \
+[CH]  [CH]  [CH]  [CH]
+/\    /\    /\    /\
+S  S  S S  S S  S S
+```
+8 Starters → 4 Challengers → 2 Leaders → 1 Ranker
+
+Animation : Quand un nœud est rempli, il s'illumine (pulse vert). Quand le board est complet → animation de célébration (confettis + modal de félicitations).
+
+### 5.4 Initialisation Admin
+
+- Le tout premier compte admin est automatiquement placé en position **Ranker du Board F**
+- Quand un nouveau Ranker arrive en Board F → l'admin monte en Board E
+- Ce système se continue automatiquement
+
+### 5.5 Flux de Paiement Board
+
+1. Utilisateur clique "Payer le board [X]"
+2. Vérification : fonds suffisants dans bourse virtuelle
+3. Déduction immédiate du montant (fee du board)
+4. Envoi automatique au Ranker actuel (7/8 des fonds)
+5. Le 8ème paiement déclenche la complétion du board
+6. Animation de célébration côté Ranker + côté board
+7. Ranker monte automatiquement, fonds alloués selon règles
+8. Notification push / in-app à tous les membres du board
+
+---
+
+## 6. BOURSE VIRTUELLE — DÉTAIL COMPLET
+
+### 6.1 Affichage du Solde
+
+**Card principale du wallet :**
+- Solde total (devise principale sélectionnée par user)
+- Conversion en temps réel dans 3 autres devises (USD, EUR, HTG, + devise locale)
+- Boutons rapides : Déposer | Retirer | Convertir | Historique
+
+**Devises supportées :**
+- USD (Dollar américain) — devise de base du système
+- EUR (Euro)
+- HTG (Gourde haïtienne) — taux fixe $1 = 140 HTG
+- BTC (Bitcoin) — taux temps réel
+- USDT (Tether) — stable à $1
+- ETH (Ethereum) — taux temps réel
+- CAD, GBP (via API taux)
+
+**Affichage du solde par catégorie :**
+```
+Solde disponible : $XXX.XX    (retirable immédiatement)
+Solde en attente : $XXX.XX    (gains en cours de board, non encore libérés)
+Solde réservé    : $XXX.XX    (déduit pour prochain board)
+Total bourse     : $XXX.XX
+```
+
+### 6.2 Dépôt de Fonds
+
+**Flux :**
+1. User clique "Déposer"
+2. Choisit le montant (champ + suggestions rapides : $10 / $50 / $100 / $500)
+3. Choisit la devise d'entrée
+4. Choisit la méthode de paiement :
+
+**Méthodes de dépôt :**
+
+a) **Moncash (Haiti)** :
+   - Affichage du numéro Moncash de la plateforme
+   - Instructions : "Envoyez [montant HTG] au [numéro], puis entrez votre référence"
+   - Upload optionnel de screenshot comme preuve
+   - Statut : "En attente de validation" (admin valide manuellement)
+   - Taux : $1 = 140 HTG (affiché clairement)
+
+b) **Natcash (Haiti)** :
+   - Même processus que Moncash
+
+c) **Carte Débit/Crédit** :
+   - Intégration Stripe Elements (formulaire carte sécurisé PCI-DSS)
+   - Visa, Mastercard, American Express
+   - Validation 3D Secure automatique
+
+d) **PayPal** :
+   - Redirection vers PayPal SDK
+   - Retour automatique après paiement
+
+e) **Virement bancaire** :
+   - Affichage des coordonnées bancaires de la plateforme
+   - Référence unique générée pour traçabilité
+   - Délai : 1-3 jours ouvrables
+
+f) **Crypto** :
+   - Bitcoin (BTC), USDT (TRC20/ERC20), ETH
+   - Affichage adresse wallet QR code
+   - Détection automatique de transaction via webhook NOWPayments/CoinGate
+   - Confirmation après X blocs selon la crypto
+
+**Après dépôt validé :**
+- Notification in-app + email + SMS optionnel
+- Crédit immédiat dans bourse virtuelle
+- Entrée dans historique avec tous les détails
+
+### 6.3 Retrait de Fonds
+
+**Conditions :**
+- Montant minimum : $5
+- Uniquement sur le "Solde disponible" (retirable)
+- KYC requis au-delà de $500 (upload pièce d'identité via Supabase Storage)
+
+**Flux :**
+1. User clique "Retirer"
+2. Saisit le montant
+3. Choisit la méthode de retrait (mêmes méthodes que dépôt)
+4. Confirmation avec code OTP envoyé par email/SMS
+5. Retrait créé en statut "En traitement"
+6. Admin valide (Moncash/Natcash) ou automatique (Stripe/Crypto)
+7. Notification confirmation
+
+**Délais affichés clairement :**
+- Moncash/Natcash : 24-48h (jours ouvrables)
+- Carte/Bank : 3-5 jours
+- Crypto : 1-24h
+- PayPal : Immédiat à 2h
+
+### 6.4 Conversion de Devises
+
+- Interface simple : [montant] [devise source] → [devise cible]
+- Taux affiché en temps réel (avec horodatage du taux)
+- Taux de conversion appliqué : taux du marché + 1% de frais plateforme
+- Confirmation avant exécution
+- Conversion instantanée dans la bourse virtuelle
+
+---
+
+## 7. SYSTÈME D'HISTORIQUE — DÉTAIL COMPLET
+
+### 7.1 Types de Transactions Enregistrées
+
+Chaque transaction stocke :
+```sql
+id UUID PRIMARY KEY
+user_id UUID REFERENCES users
+type ENUM: 
+  'DEPOSIT' | 'WITHDRAWAL' | 'BOARD_PAYMENT' | 'BOARD_RECEIPT' 
+  | 'REFERRAL_BONUS' | 'CONVERSION' | 'ACTIVATION_FEE'
+  | 'BOARD_PROMOTION' | 'SYSTEM_FEE'
+amount DECIMAL(18,2)
+currency VARCHAR(10)
+amount_usd DECIMAL(18,2)  -- toujours converti en USD pour uniformité
+status ENUM: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED'
+payment_method VARCHAR(50)
+reference_id VARCHAR(100)  -- ID externe (Stripe, Moncash, etc.)
+from_board VARCHAR(5)
+to_user_id UUID            -- pour les transferts entre users
+metadata JSONB             -- données supplémentaires
+created_at TIMESTAMPTZ
+updated_at TIMESTAMPTZ
+```
+
+### 7.2 Interface Historique
+
+**Filtres disponibles :**
+- Par type de transaction (multi-select)
+- Par statut
+- Par plage de dates (date picker)
+- Par montant (min/max)
+- Par méthode de paiement
+- Recherche par référence/ID
+
+**Affichage :**
+- Tableau avec colonnes : Date, Type, Description, Montant, Statut, Actions
+- Vue mobile : Cards condensées avec swipe pour voir détails
+- Pagination (20 par page) + "Charger plus"
+- Tri par colonne (date desc par défaut)
+- Code couleur par statut : vert=complété, orange=en attente, rouge=échoué
+
+**Export :**
+- CSV (toutes colonnes)
+- PDF (rapport formaté avec logo Ecrossflow, dates, totaux)
+- Filtres appliqués à l'export
+
+### 7.3 Rapport Détaillé par Compte
+
+**Dashboard Rapport (/history/report) :**
+
+Section 1 — Résumé Financier :
+```
+Total déposé       : $XXX.XX
+Total retiré       : $XXX.XX  
+Total reçu (dons)  : $XXX.XX
+Total payé (boards): $XXX.XX
+Frais système      : $XXX.XX
+Bonus parrainage   : $XXX.XX
+Bénéfice net       : $XXX.XX
+```
+
+Section 2 — Progression par Board :
+```
+Board F : Complété le [date] | Gagné: $16 | Retiré: $6 | Réinvesti: $8
+Board E : En cours | Rôle: Challenger | Payé: $8
+...
+```
+
+Section 3 — Graphiques :
+- Graphique ligne : Évolution du solde dans le temps
+- Graphique barre : Entrées vs Sorties par mois
+- Donut : Répartition par type de transaction
+
+Section 4 — Activité de parrainage :
+- Nombre de filleuls directs
+- Filleuls actifs vs inactifs
+- Total bonus reçus par parrainage
+
+---
+
+## 8. SYSTÈME PYRAMIDAL — LOGIQUE BASE DE DONNÉES
+
+### 8.1 Tables Supabase Principales
+
+```sql
+-- Utilisateurs
+CREATE TABLE users (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  account_number INTEGER UNIQUE,  -- assigné à la validation
+  first_name VARCHAR(100) NOT NULL,
+  last_name VARCHAR(100) NOT NULL,
+  username VARCHAR(50) UNIQUE NOT NULL,
+  email VARCHAR(255) UNIQUE NOT NULL,
+  phone VARCHAR(20),
+  avatar_url TEXT,
+  referral_code VARCHAR(20) UNIQUE NOT NULL,  -- généré à l'inscription
+  referred_by UUID REFERENCES users(id),
+  status ENUM('PENDING', 'ACTIVE', 'SUSPENDED') DEFAULT 'PENDING',
+  role ENUM('USER', 'ADMIN') DEFAULT 'USER',
+  kyc_status ENUM('NONE', 'PENDING', 'APPROVED', 'REJECTED') DEFAULT 'NONE',
+  preferred_language VARCHAR(5) DEFAULT 'fr',
+  preferred_currency VARCHAR(10) DEFAULT 'USD',
+  preferred_theme VARCHAR(20) DEFAULT 'light',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  activated_at TIMESTAMPTZ,
+  CONSTRAINT referral_code_format CHECK (referral_code ~ '^[A-Z0-9]{8}$')
+);
+
+-- Parrainage (pour tracker l'arbre)
+CREATE TABLE referrals (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  referrer_id UUID REFERENCES users(id),
+  referred_id UUID REFERENCES users(id),
+  bonus_paid BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Boards (configuration)
+CREATE TABLE boards (
+  id VARCHAR(5) PRIMARY KEY,  -- 'F','E','D','C','B','A','S'
+  rank_order INTEGER,
+  entry_fee DECIMAL(10,2),
+  multiplier INTEGER DEFAULT 8,
+  total_gain DECIMAL(10,2),
+  next_board_deduction DECIMAL(10,2),
+  withdrawable DECIMAL(10,2),
+  description TEXT,
+  color_theme VARCHAR(50)
+);
+
+-- Instances de board (une instance = un groupe de 8 personnes)
+CREATE TABLE board_instances (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  board_id VARCHAR(5) REFERENCES boards(id),
+  instance_number INTEGER,
+  ranker_id UUID REFERENCES users(id),
+  status ENUM('WAITING', 'ACTIVE', 'COMPLETED') DEFAULT 'WAITING',
+  slots_filled INTEGER DEFAULT 0,
+  total_collected DECIMAL(10,2) DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+-- Participation aux boards
+CREATE TABLE board_participants (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  board_instance_id UUID REFERENCES board_instances(id),
+  user_id UUID REFERENCES users(id),
+  role ENUM('STARTER', 'CHALLENGER', 'LEADER', 'RANKER'),
+  position INTEGER,  -- 1-8 pour les starters
+  amount_paid DECIMAL(10,2),
+  paid_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Bourse virtuelle
+CREATE TABLE wallets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID UNIQUE REFERENCES users(id),
+  balance_usd DECIMAL(18,2) DEFAULT 0,
+  balance_pending DECIMAL(18,2) DEFAULT 0,
+  balance_reserved DECIMAL(18,2) DEFAULT 0,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Transactions
+CREATE TABLE transactions (
+  -- (voir section 7.1 pour le schéma complet)
+);
+
+-- Bonus
+CREATE TABLE bonuses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES users(id),
+  type ENUM('REFERRAL_3', 'BOARD_COMPLETION', 'MILESTONE'),
+  amount DECIMAL(10,2),
+  status ENUM('PENDING', 'PAID'),
+  trigger_event TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### 8.2 Triggers et Edge Functions Supabase
+
+**Trigger : Numérotation automatique des comptes**
+```sql
+-- Quand les 2 conditions sont remplies (paiement $1 + 2 filleuls)
+-- → account_number est assigné par ordre d'activation (1, 2, 3...)
+-- Le premier compte admin a account_number = 0 (ou réservé)
+```
+
+**Edge Function : board_payment_processor**
+- Appelée à chaque paiement de board
+- Vérifie le solde, déduit, envoie au Ranker
+- Si 8ème paiement → déclenche board_completion_handler
+
+**Edge Function : board_completion_handler**
+- Crée notification pour tous les membres
+- Fait monter le Ranker au board suivant
+- Alloue les fonds (retirable + réservé pour prochain board)
+- Crée nouvelle instance de board
+
+**Realtime Subscriptions :**
+- Board instances : mise à jour en temps réel de la pyramide
+- Wallet balance : mise à jour temps réel du solde
+- Notifications : push temps réel
+
+---
+
+## 9. SYSTÈME DE PARRAINAGE & BONUS
+
+### 9.1 Lien et Code de Parrainage
+
+Chaque utilisateur reçoit :
+- **Code unique** : 8 caractères alphanum majuscules (ex: `ECF-3X9KM2`)
+- **Lien unique** : `https://ecrossflow.com/join?ref=3X9KM2`
+- **QR Code** : génératable et téléchargeable
+
+**Page Parrainage (/referrals) :**
+- Affichage du lien + code avec bouton "Copier"
+- Boutons partage direct : WhatsApp, Telegram, Facebook, Twitter, Email, SMS
+- QR Code (généré client-side avec qrcode.js)
+- Compteur filleuls : Total | Actifs | En attente
+- Tableau des filleuls (pseudo, date d'inscription, statut)
+- Barre de progression vers bonus (0/2 pour activation, 0/3 pour bonus)
+
+### 9.2 Règles de Parrainage
+
+**Activation de compte :**
+- User doit parrainer 2 personnes qui s'inscrivent ET activent leur compte
+- Ou payer $1 + avoir 2 filleuls inscrits (ils n'ont pas besoin d'être actifs)
+- Quand les 2 conditions remplies → compte validé → numéro assigné
+
+**Bonus de Recrutement (3 filleuls actifs) :**
+- Si un utilisateur recrute 3 filleuls qui activent leur compte
+- → Bonus automatique crédité dans sa bourse virtuelle
+- Montant du bonus = à définir (ex: $5 ou % du fee du board actuel)
+- Notification immédiate : "🎉 Vous avez recruté 3 membres ! Bonus de $X crédité"
+
+**Multi-niveaux (optionnel, à configurer) :**
+- Niveau 1 (filleuls directs) : bonus X%
+- Niveau 2 (filleuls de filleuls) : bonus Y%
+- Configurable dans admin settings
+
+---
+
+## 10. ANIMATIONS & EXPÉRIENCE UTILISATEUR
+
+### 10.1 Animations de Célébration (Board Completé)
+
+Déclenché quand le Ranker complète un board :
+
+**Phase 1 (0-500ms) :** Flash lumineux sur toute la page (blanc/gold semi-transparent)
+
+**Phase 2 (500ms-2s) :** 
+- Confettis tombant depuis le haut (bibliothèque `canvas-confetti`)
+- Couleurs selon le board : or pour C/B/A, diamant bleu pour S
+- Modal de félicitations au centre avec :
+  - Animation d'entrée : scale 0 → 1 avec spring bounce
+  - Badge du nouveau rang qui "apparaît" avec rotation + glow
+  - Texte : "Félicitations ! Vous êtes maintenant [RANG] !"
+  - Montant gagné affiché en grand avec compteur qui monte
+  - Bouton "Réclamer mes gains" (CTA principal)
+  - Bouton "Partager ma réussite" (génère une image shareable)
+
+**Phase 3 (2s+) :** 
+- La pyramide du board s'illumine entièrement (tous les nœuds en or)
+- Animation "explosion" vers le board suivant
+- Le badge du user dans le header change de rang
+
+### 10.2 Animations de Navigation
+
+- Transitions de page : Fade + Slide selon la direction
+- Sidebar : Slide-in smooth sur mobile
+- Cards : Hover avec lift effect (translateY -4px + shadow)
+- Boutons : Scale + glow au click
+- Chargement : Skeleton avec shimmer effect
+- Erreurs : Shake animation (3 oscillations rapides)
+
+### 10.3 Micro-interactions
+
+- Input focus : Border color transition + label float animation
+- Toggle (thème, langue) : Switch avec thumb glisse smooth
+- Copier lien : Icône qui change "copier → check ✓" pendant 2s
+- Upload fichier : Zone drag-and-drop avec highlight animé
+- Notifications badge : Pulse animation quand nouvelle notification
+- Solde wallet : Flip animation quand le montant change
+
+### 10.4 Onboarding Tour (première connexion)
+- Tooltip spotlight sequentiel (bibliothèque Shepherd.js ou custom)
+- Étapes : "Voici votre bourse" → "Voici votre board actuel" → "Votre lien de parrainage" → "Votre historique"
+- Skip disponible à tout moment
+- Progression (1/4, 2/4...)
+
+---
+
+## 11. MULTI-LANGUE — DÉTAIL
+
+### 11.1 Langues Supportées
+
+| Code | Langue | Drapeau | Completude |
+|------|--------|---------|------------|
+| `fr` | Français | 🇫🇷 | 100% (langue principale) |
+| `en` | English | 🇺🇸 | 100% |
+| `es` | Español | 🇪🇸 | 100% |
+| `ht` | Kreyòl Ayisyen | 🇭🇹 | 100% |
+
+### 11.2 Implémentation
+
+- Bibliothèque : `next-intl` avec fichiers JSON par langue
+- Détection automatique : navigateur → fallback `fr`
+- Persistance : localStorage + profil utilisateur (DB)
+- Sélecteur : Dropdown dans header + dans settings + dans footer (public)
+- Formatage : dates, montants, nombres selon locale
+
+### 11.3 Clés de traduction importantes
+
+```json
+// Structure des fichiers /locales/[lang].json
+{
+  "common": {
+    "deposit": "Déposer | Deposit | Depositar | Depoze",
+    "withdraw": "Retirer | Withdraw | Retirar | Retire",
+    "balance": "Solde | Balance | Saldo | Balans"
+  },
+  "boards": {
+    "starter": "Starter | Starter | Principiante | Débitè",
+    "challenger": "Challenger | Challenger | Retador | Chalanjer",
+    "leader": "Leader | Leader | Líder | Lidè",
+    "ranker": "Ranker | Ranker | Clasificado | Rankè",
+    "board_complete": "Board Complété ! | Board Complete! | ¡Tablero Completo! | Bòd la Konplè!"
+  },
+  "auth": { ... },
+  "wallet": { ... },
+  "notifications": { ... }
+}
+```
+
+---
+
+## 12. NOTIFICATIONS — SYSTÈME COMPLET
+
+### 12.1 Types de Notifications
+
+| Événement | In-app | Email | SMS |
+|-----------|--------|-------|-----|
+| Compte activé | ✅ | ✅ | Optionnel |
+| Paiement reçu | ✅ | ✅ | Optionnel |
+| Board complété | ✅ | ✅ | ✅ |
+| Retrait validé | ✅ | ✅ | ✅ |
+| Nouveau filleul | ✅ | ✅ | ❌ |
+| Bonus crédité | ✅ | ✅ | Optionnel |
+| Connexion nouveau device | ✅ | ✅ | ✅ |
+| Dépôt validé | ✅ | ✅ | Optionnel |
+
+### 12.2 Centre de Notifications (/notifications)
+- Liste chronologique (infinite scroll)
+- Badge rouge sur icône cloche (count non lus)
+- Marqué comme lu au clic
+- Filtre : Toutes | Non lues | Financières | Sécurité
+- Action rapide depuis la notification (ex: "Voir le board" | "Voir la transaction")
+
+---
+
+## 13. ESPACE ADMIN — DÉTAIL
+
+### 13.1 Dashboard Admin
+
+**KPIs en temps réel :**
+- Utilisateurs totaux / actifs / en attente
+- Volume traité (24h / 7j / 30j)
+- Boards actifs et leur état
+- Transactions en attente de validation
+- Retraits en attente
+
+**Alertes :**
+- Paiements Moncash/Natcash à valider
+- Retraits en attente > 24h
+- Comptes suspects (activité anormale)
+
+### 13.2 Gestion Utilisateurs
+
+- Tableau avec : #, Pseudo, Email, Statut, Board actuel, Solde, Date inscription
+- Recherche full-text
+- Filtres : Statut, Board, Date
+- Actions : Voir profil complet, Suspendre, Réactiver, Ajuster solde manuellement (avec note obligatoire), Réinitialiser 2FA
+- Export CSV
+
+### 13.3 Validation Paiements Manuels (Moncash/Natcash)
+
+- Interface dédiée avec liste des dépôts en attente
+- Chaque item : User, Montant HTG, Référence fournie, Screenshot uploadé, Date
+- Actions : Approuver (crédit automatique) | Rejeter (notification au user + raison)
+- Historique des validations admin
+
+### 13.4 Rapports Admin
+
+- Revenus plateforme (frais système collectés)
+- Distribution des fonds par board
+- Rapport de croissance utilisateurs
+- Export PDF/CSV avec filtres date
+
+---
+
+## 14. SÉCURITÉ — CHECKLIST COMPLÈTE
+
+- [ ] Row Level Security (RLS) activé sur toutes les tables Supabase
+- [ ] Chaque user ne voit que ses propres données
+- [ ] Admin bypass RLS avec service_role key (côté Edge Functions seulement)
+- [ ] Validation de toutes les entrées (server-side via Edge Functions)
+- [ ] Rate limiting sur auth, paiements, OTP
+- [ ] HTTPS uniquement (Vercel auto)
+- [ ] Variables d'environnement : jamais de clé côté client (sauf NEXT_PUBLIC_*)
+- [ ] Webhooks Stripe vérifiés avec signature
+- [ ] Webhooks crypto vérifiés avec secret
+- [ ] Logs d'audit : toute action admin est loggée
+- [ ] KYC requis au-delà de $500 de retrait
+- [ ] 2FA optionnel (fortement encouragé)
+- [ ] Session invalidation à chaque changement de mot de passe
+- [ ] CORS configuré strictement
+- [ ] SQL injection impossible (Supabase parameterized queries)
+- [ ] XSS prevention (React escape automatique + CSP headers)
+- [ ] CSRF tokens sur formulaires sensibles
+
+---
+
+## 15. PERFORMANCE — OPTIMISATIONS
+
+- Images : next/image avec WebP + lazy loading
+- Fonts : self-hosted avec `font-display: swap`
+- Code splitting automatique (Next.js)
+- SSG pour pages publiques (landing, how-it-works)
+- SSR pour pages nécessitant auth check
+- CSR pour dashboard (données temps réel)
+- Supabase Realtime pour mises à jour live (pas de polling)
+- Cache API taux de change : 1 minute (Redis ou Upstash)
+- Bundle analyzer (next-bundle-analyzer) pour optimiser
+
+**Objectifs Core Web Vitals :**
+- LCP < 2.5s
+- FID < 100ms
+- CLS < 0.1
+
+---
+
+## 16. INTERNATIONALISATION DES PAIEMENTS
+
+### Taux de Change
+- HTG (Gourde haïtienne) : **Fixe $1 = 140 HTG** (à mettre à jour depuis admin si besoin)
+- Autres devises : API Open Exchange Rates (gratuit jusqu'à 1000 req/mois) ou Fixer.io
+- Cache 1 heure pour éviter appels excessifs
+- Affichage du taux utilisé sur chaque transaction
+
+### Frais de Conversion
+- Moncash/Natcash : 0% (frais fixés dans le taux HTG)
+- Carte/Stripe : 2.9% + $0.30 (Stripe standard) — afficher clairement avant confirmation
+- Crypto : réseau fee variable (affiché en temps réel)
+- PayPal : 3.5% international — affiché avant confirmation
+- Tous les frais affichés AVANT confirmation, jamais cachés
+
+---
+
+## 17. STRUCTURE FICHIERS PROJET (Next.js)
+
+```
+ecrossflow/
+├── public/
+│   ├── images/
+│   ├── icons/
+│   └── manifest.json
+├── src/
+│   ├── app/
+│   │   ├── [locale]/           # next-intl routing
+│   │   │   ├── (public)/       # pages publiques
+│   │   │   │   ├── page.tsx    # landing
+│   │   │   │   ├── auth/
+│   │   │   │   └── how-it-works/
+│   │   │   ├── (private)/      # pages auth required
+│   │   │   │   ├── dashboard/
+│   │   │   │   ├── wallet/
+│   │   │   │   ├── boards/
+│   │   │   │   ├── history/
+│   │   │   │   ├── referrals/
+│   │   │   │   ├── profile/
+│   │   │   │   └── settings/
+│   │   │   └── (admin)/        # pages admin only
+│   │   │       └── admin/
+│   ├── components/
+│   │   ├── ui/                 # composants réutilisables
+│   │   │   ├── Button/
+│   │   │   ├── Card/
+│   │   │   ├── Modal/
+│   │   │   ├── Input/
+│   │   │   ├── Badge/
+│   │   │   ├── Skeleton/
+│   │   │   └── Toast/
+│   │   ├── layout/
+│   │   │   ├── Sidebar/
+│   │   │   ├── BottomNav/
+│   │   │   ├── Header/
+│   │   │   └── Footer/
+│   │   ├── boards/
+│   │   │   ├── BoardCard/
+│   │   │   ├── PyramidView/
+│   │   │   ├── BoardProgressBar/
+│   │   │   └── CelebrationModal/
+│   │   ├── wallet/
+│   │   │   ├── BalanceCard/
+│   │   │   ├── DepositModal/
+│   │   │   ├── WithdrawModal/
+│   │   │   └── TransactionRow/
+│   │   └── auth/
+│   │       ├── LoginForm/
+│   │       ├── RegisterForm/
+│   │       └── OTPVerification/
+│   ├── lib/
+│   │   ├── supabase/
+│   │   │   ├── client.ts
+│   │   │   ├── server.ts
+│   │   │   └── middleware.ts
+│   │   ├── payments/
+│   │   │   ├── stripe.ts
+│   │   │   ├── crypto.ts
+│   │   │   └── moncash.ts
+│   │   ├── i18n/
+│   │   └── utils/
+│   ├── hooks/
+│   │   ├── useAuth.ts
+│   │   ├── useWallet.ts
+│   │   ├── useBoards.ts
+│   │   └── useRealtime.ts
+│   ├── stores/               # Zustand global state
+│   │   ├── authStore.ts
+│   │   ├── walletStore.ts
+│   │   └── uiStore.ts
+│   ├── types/
+│   │   ├── database.types.ts  # généré par Supabase CLI
+│   │   └── app.types.ts
+│   └── styles/
+│       ├── globals.css
+│       └── themes.css
+├── locales/
+│   ├── fr.json
+│   ├── en.json
+│   ├── es.json
+│   └── ht.json
+├── supabase/
+│   ├── migrations/            # SQL migrations
+│   └── functions/             # Edge Functions
+│       ├── board-payment/
+│       ├── board-complete/
+│       ├── validate-moncash/
+│       └── send-notification/
+├── .env.local
+├── next.config.js
+├── tailwind.config.js
+└── package.json
+```
+
+---
+
+## 18. VARIABLES D'ENVIRONNEMENT
+
+```env
+# Supabase
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+
+# Stripe
+NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+
+# Crypto (NOWPayments)
+NOWPAYMENTS_API_KEY=
+NOWPAYMENTS_IPN_SECRET=
+
+# Taux de change
+EXCHANGE_RATE_API_KEY=
+
+# Email / SMS (Resend + Twilio)
+RESEND_API_KEY=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+
+# App
+NEXT_PUBLIC_APP_URL=https://ecrossflow.com
+NEXT_PUBLIC_HTG_RATE=140
+ADMIN_REFERRAL_CODE=ECF-ADMIN0  # code de l'admin fondateur
+```
+
+---
+
+## 19. ROADMAP PHASES DE DÉVELOPPEMENT
+
+### Phase 1 — MVP (8-12 semaines)
+- [ ] Setup Next.js + Supabase + Auth
+- [ ] Inscription / Connexion (formulaire + Google)
+- [ ] Système de parrainage basique
+- [ ] Bourse virtuelle (affichage solde)
+- [ ] Board F complet (logique + UI)
+- [ ] Paiement Stripe (carte)
+- [ ] Historique basique
+- [ ] Thème light/dark
+- [ ] FR + EN
+
+### Phase 2 — Version Complète (6-8 semaines)
+- [ ] Tous les boards (F→S)
+- [ ] Paiements Moncash/Natcash (validation manuelle)
+- [ ] Paiements crypto
+- [ ] Multi-devises complets
+- [ ] Rapport détaillé + export
+- [ ] Animations de célébration
+- [ ] Multi-langue ES + HT
+- [ ] Admin dashboard
+
+### Phase 3 — Optimisation (4 semaines)
+- [ ] KYC (upload pièce d'identité)
+- [ ] PWA (installable)
+- [ ] Tests automatisés (Playwright E2E)
+- [ ] Performance audit + optimisations
+- [ ] Revue sécurité externe
+- [ ] Launch 🚀
+
+---
+
+## 20. NOTES LÉGALES ET COMPLIANCE
+
+⚠️ **AVERTISSEMENT IMPORTANT :**
+
+Le modèle de don pyramidal est légalement encadré dans de nombreux pays. Avant le lancement :
+
+1. **Consultation juridique obligatoire** dans chaque pays cible
+2. **Disclaimer clair** sur toutes les pages : "Ecrossflow est une plateforme de don communautaire. Les performances passées ne garantissent pas les gains futurs."
+3. **CGU détaillées** incluant : nature des transactions (dons), risques, pays exclus
+4. **KYC/AML** : vérification d'identité pour les montants importants
+5. **Enregistrement** auprès des autorités financières locales si requis
+6. **Politique de remboursement** clairement définie (les dons sont-ils remboursables ?)
+
+Le code "frais" dans le Board A ($2,050 au lieu de $2,048) représente $2 de frais plateforme — à documenter clairement dans les CGU.
+
+---
+
+*Ce prompt a été généré pour servir de spécification complète au développement d'Ecrossflow. Il doit être utilisé comme référence principale par l'équipe de développement, les designers et les parties prenantes.*
+
+**Version : 1.0 — Mars 2026**
+**Plateforme : Ecrossflow Digital Donation Platform**
