@@ -10,11 +10,15 @@ function createTransport() {
   const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS } = process.env;
 
   if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
+    const port = SMTP_PORT ? Number(SMTP_PORT) : 587;
+    const secure = port === 465;
     return nodemailer.createTransport({
       host: SMTP_HOST,
-      port: SMTP_PORT ? Number(SMTP_PORT) : 587,
-      secure: Number(SMTP_PORT) === 465,
+      port,
+      secure,
+      requireTLS: !secure,
       auth: { user: SMTP_USER, pass: SMTP_PASS },
+      tls: { rejectUnauthorized: false },
     });
   }
 
@@ -36,12 +40,19 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
     return;
   }
 
-  await transport.sendMail({
-    from,
-    to: payload.to,
-    subject: payload.subject,
-    html: payload.html,
-  });
+  try {
+    const info = await transport.sendMail({
+      from: `Ecrossflow <${from}>`,
+      to: payload.to,
+      subject: payload.subject,
+      html: payload.html,
+    });
+    console.log(`[EMAIL] Sent to ${payload.to} — messageId: ${info.messageId}`);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[EMAIL] Failed to send to ${payload.to}: ${message}`);
+    throw err;
+  }
 }
 
 export function buildOtpEmail(otp: string, email: string): EmailPayload {

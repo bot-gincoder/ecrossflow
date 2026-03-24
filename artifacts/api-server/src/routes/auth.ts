@@ -568,7 +568,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
 
   // Default: email
   await sendEmail(buildOtpEmail(otp, email)).catch(() => {
-    console.warn(`[OTP] Email delivery failed for ${email}`);
+    console.warn(`[OTP] Email delivery failed for ${email} — OTP code: ${otp}`);
   });
 
   res.json({ message: "OTP sent", method: "email", email });
@@ -605,7 +605,7 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
   });
 
   await sendEmail(buildOtpEmail(otp, email)).catch(() => {
-    console.warn(`[OTP] Email delivery failed for ${email}`);
+    console.warn(`[OTP] Email delivery failed for ${email} — OTP code: ${otp}`);
   });
 
   res.json({ message: "OTP resent", email });
