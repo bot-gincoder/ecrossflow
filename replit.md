@@ -36,12 +36,23 @@ Ecrossflow is a pyramid-based community donation platform ("plateforme numériqu
 
 ### Multi-currency Wallet
 - Supported: USD, HTG (fixed $1=140 HTG), EUR, GBP, CAD, BTC, ETH, USDT
-- Payment methods: MonCash, NatCash, Bank Transfer, Crypto, PayPal
+- Payment methods: MonCash, NatCash, Bank Transfer, Crypto, Card (Stripe)
+- Tabs: Deposit / Withdraw only (Convert tab removed)
 
 ### Referral System
-- Mandatory referral code at registration
+- Mandatory referral code at registration (no platform fallback code shown)
 - Format: ECF + 6 alphanumeric chars (e.g., ECFADMIN0)
 - Admin seed code: `ECFADMIN0`
+- ECFSTART (fondateur starter code) is ONE-TIME USE — blocked once used
+- PLATFORM_REF_CODE env var controls the one-time code (default: ECFSTART)
+
+### Registration Form (New Features)
+- Country code selector with flags for phone field (25 countries, default +509 Haiti)
+- Email confirmation field with real-time match validation
+- Password confirmation field with real-time match validation
+- OTP method selection modal after registration: Email / SMS / WhatsApp
+  - SMS & WhatsApp ready when TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE are set
+  - Falls back to email if Twilio not configured
 
 ### Multi-language Support
 - French (fr), English (en), Spanish (es), Haitian Creole (ht)

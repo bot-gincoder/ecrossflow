@@ -1,0 +1,45 @@
+Je n'aime pas du tout la facon dont tu a setup le compte admin, ce n'est pas un utilisateur comme les , donc ils ne participe pas mais il gere,. il gere les fonds par exemple ledger du bourse virtuel integrer : Le cœur du système,
+(NB: ledger C’est lui qui garde la vérité métier :
+solde utilisateur
+historique des dépôts
+historique des retraits
+frais
+bonus
+transferts internes
+fonds gelés
+fonds disponibles).           
+Il faut penser ça comme une mini-comptabilité bancaire. Chaque mouvement doit être écrit en double entrée : si un utilisateur reçoit +10, quelque part un autre compte système doit avoir -10. C’est exactement le principe mis en avant par les systèmes de ledger modernes pour suivre les balances et les transactions de façon immuable. 
+
+
+
+Sur le compte admin aussi, la plateforme cliente doit etre 100% personalisable. Absolument tous , les valeur, les prix meme si les operations restent, des textes etc...
+
+Le compte admin doit gerer tous la partie technique du platforme mais de maniere a ce qu'un non dev peut tous manipuler sans probleme
+Autres probleme detecté:
+dans le champ numero dans le formulaire d'inscription il n'y a pas de selecteur de code pays avec l'icon du drapeau du pays.
+
+[  ] Le selecteur de langue ne fonctionne pas, la plateforme n'est pas 100% traduit en la langue selectionné, gere ça en selectionnant une langue meme le texte le plus minime du platforme doit etre traduit absolument tous les textes incluant tous les users. Ajoute aussi une derniere option dans le selecteur de langue("autres langue", pour permetre la traduction automatique dans autant de langues possibles) 
+
+
+n'indiqué pas dans le formulaire d'inscription d'utiliser le premier code de parannage d'ailleur ce code est valide juste pour une inscription apres il sera automatiquement desactiver apres ce qui est different des codes de parrainage des autres utilisateurs normaux.
+
+
+
+Enleve la fonction convert du bourse virtuel, car il n'est pas une bourse dedié de gestion de fond pro, c'est juste une bourse pour que les user gerent leur fond dans la plateforme 
+
+le code de parainnage affiche dans chaque compte doit etre copiable en 1 click, comme le lien. 
+
+
+
+. D'autre touche a faire 
+Dans le formulaire d'inscription
+pour s'arrurer que la personne qui remplisse le champ ne fasse pas d'erreurs .
+les champs email et passwd doivent etre affiché deux fois pour une confirmation exacte afin d'eviter de faire des erreurs dans ces champ.
+
+Gere le mail pour que des mail auto personalisé envoye dans l'email de l'utilisateur , depuis @ecrossflow.com, par exemple pour envoyer un otp, gere aussi le centre de sms , pour qu'il envoe aussi des notif otp etc...
+
+
+Regles a appliquer , une fois tous les champs remplit et que le user click sur creer un compte. Avant de l'envoyer directement vers la page pour rentrer le code otp . D'abord affiche lui un modal de choix pour qu'il choisissent entre ces 3 methode pour recevoir l'otp, soit via sms, email ou whatssapp sur son numero configure aussi pour le whatssapp, et tous ca doivent etre 100% personalisable dans le dashboard admin
+
+je veux une plateforme zero simulation tous doit etre fait de maniere complete
+demande moi tous ce que je dois 4e fournit pour rendre tous ca 100% fonctionnel

@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Wallet, ArrowDownCircle, ArrowUpCircle, RefreshCcw, DollarSign,
+  Wallet, ArrowDownCircle, ArrowUpCircle, DollarSign,
   TrendingUp, Loader2, Copy, Check, Shield, CreditCard,
   Building2, Smartphone, X, Upload, CheckCircle
 } from 'lucide-react';
 import {
-  useGetWallet, useGetExchangeRates, useCreateDeposit, useCreateWithdrawal, useConvertCurrency,
+  useGetWallet, useGetExchangeRates, useCreateDeposit, useCreateWithdrawal,
   useRequestWithdrawalOtp,
 } from '@workspace/api-client-react';
 import type { DepositRequestPaymentMethod, WithdrawalRequestPaymentMethod } from '@workspace/api-client-react';
@@ -32,7 +32,7 @@ const WITHDRAW_METHODS = [
 
 const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT'];
 
-type Tab = 'deposit' | 'withdraw' | 'convert';
+type Tab = 'deposit' | 'withdraw';
 
 const MONCASH_NUMBER = '+509 3777-8888';
 const MONCASH_NAME = 'Ecrossflow Platform';
@@ -338,7 +338,6 @@ function WalletInner() {
   const [paymentMethod, setPaymentMethod] = React.useState('MONCASH');
   const [reference, setReference] = React.useState('');
   const [destination, setDestination] = React.useState('');
-  const [toCurrency, setToCurrency] = React.useState('HTG');
   const [showOTP, setShowOTP] = React.useState(false);
   const [serverOtp, setServerOtp] = React.useState<string | null>(null);
   const [otpError, setOtpError] = React.useState('');
@@ -371,7 +370,6 @@ function WalletInner() {
       }
     }
   });
-  const { mutate: convert, isPending: isConverting, data: convertResult, reset: resetConvert } = useConvertCurrency();
 
   const requestOtp = () => {
     if (!amount || !currency) return;
@@ -396,8 +394,6 @@ function WalletInner() {
       deposit({ data: { amount: parseFloat(amount), currency, paymentMethod: paymentMethod as DepositRequestPaymentMethod, reference, evidenceUrl: evidenceUrl || undefined } });
     } else if (tab === 'withdraw') {
       requestOtp();
-    } else {
-      convert({ data: { amount: parseFloat(amount), fromCurrency: currency, toCurrency } });
     }
   };
 
@@ -415,7 +411,7 @@ function WalletInner() {
     <div className="space-y-8">
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
           <h1 className="text-3xl font-display font-bold">Bourse Virtuelle</h1>
-          <p className="text-muted-foreground mt-1">Gérez vos dépôts, retraits et conversions</p>
+          <p className="text-muted-foreground mt-1">Gérez vos dépôts et retraits</p>
         </motion.div>
 
         {/* Wallet Balance Cards */}
@@ -460,13 +456,13 @@ function WalletInner() {
         >
           {/* Tabs */}
           <div className="flex gap-2 mb-6 bg-muted/40 p-1 rounded-xl w-fit">
-            {(['deposit', 'withdraw', 'convert'] as Tab[]).map(t => (
+            {(['deposit', 'withdraw'] as Tab[]).map(t => (
               <button
                 key={t}
-                onClick={() => { setTab(t); resetDeposit?.(); resetWithdraw?.(); resetConvert?.(); setAmount(''); setPaymentMethod('MONCASH'); }}
+                onClick={() => { setTab(t); resetDeposit?.(); resetWithdraw?.(); setAmount(''); setPaymentMethod('MONCASH'); }}
                 className={`px-5 py-2 rounded-lg font-medium capitalize transition-all ${tab === t ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
-                {t === 'deposit' ? '↓ Déposer' : t === 'withdraw' ? '↑ Retirer' : '⇌ Convertir'}
+                {t === 'deposit' ? '↓ Déposer' : '↑ Retirer'}
               </button>
             ))}
           </div>
@@ -502,8 +498,7 @@ function WalletInner() {
               </div>
             </div>
 
-            {tab !== 'convert' && (
-              <div>
+            <div>
                 <label className="text-sm font-medium text-muted-foreground block mb-2">Méthode de paiement</label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {currentDepositMethods.map(m => (
@@ -518,7 +513,6 @@ function WalletInner() {
                   ))}
                 </div>
               </div>
-            )}
 
             {/* Payment Method Instructions */}
             {tab === 'deposit' && paymentMethod && amount && (
@@ -581,31 +575,6 @@ function WalletInner() {
               </div>
             )}
 
-            {tab === 'convert' && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Convertir en</label>
-                <select
-                  value={toCurrency}
-                  onChange={e => setToCurrency(e.target.value)}
-                  className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                >
-                  {CURRENCIES.filter(c => c !== currency).map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-            )}
-
-            {/* Convert Result */}
-            {convertResult && tab === 'convert' && (
-              <div className="bg-primary/10 border border-primary/20 rounded-xl p-4">
-                <div className="flex items-center gap-2 text-primary mb-2">
-                  <CheckCircle className="w-4 h-4" />
-                  <p className="text-sm font-semibold">Conversion effectuée !</p>
-                </div>
-                <p className="font-bold text-xl font-display text-primary">{convertResult.convertedAmount.toFixed(6)} {toCurrency}</p>
-                <p className="text-xs text-muted-foreground mt-1">Frais: ${convertResult.fee.toFixed(2)} | Taux: {convertResult.rate.toFixed(6)}</p>
-              </div>
-            )}
-
             {/* Success feedback */}
             {(depositSuccess || withdrawSuccess) && (
               <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-primary">
@@ -621,13 +590,12 @@ function WalletInner() {
 
             <button
               type="submit"
-              disabled={isDepositing || isWithdrawing || isConverting || isRequestingOtp}
+              disabled={isDepositing || isWithdrawing || isRequestingOtp}
               className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold text-lg hover:shadow-[0_0_20px_rgba(0,255,170,0.3)] transition-all disabled:opacity-60"
             >
-              {(isDepositing || isWithdrawing || isConverting || isRequestingOtp) ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+              {(isDepositing || isWithdrawing || isRequestingOtp) ? <Loader2 className="w-5 h-5 animate-spin" /> : (
                 tab === 'deposit' ? <><ArrowDownCircle className="w-5 h-5" /> Déposer</> :
-                tab === 'withdraw' ? <><ArrowUpCircle className="w-5 h-5" /> Retirer</> :
-                <><RefreshCcw className="w-5 h-5" /> Convertir</>
+                <><ArrowUpCircle className="w-5 h-5" /> Retirer</>
               )}
             </button>
           </form>

@@ -50,6 +50,7 @@ router.get("/auth/verify-referral", async (req, res) => {
   }
 
   const user = await db.select({
+    id: usersTable.id,
     firstName: usersTable.firstName,
     lastName: usersTable.lastName,
     username: usersTable.username,
@@ -58,6 +59,18 @@ router.get("/auth/verify-referral", async (req, res) => {
   if (!user.length) {
     res.status(404).json({ error: "Not Found", message: "Invalid referral code" });
     return;
+  }
+
+  // Check if this is the platform starter code and already used
+  const PLATFORM_CODE = (process.env.PLATFORM_REF_CODE || "ECFSTART").toUpperCase();
+  if (code.toUpperCase() === PLATFORM_CODE) {
+    const usageCount = await db.select({ count: referralsTable.id })
+      .from(referralsTable)
+      .where(eq(referralsTable.referrerId, user[0].id));
+    if (usageCount.length > 0) {
+      res.status(404).json({ error: "Not Found", message: "Ce code de démarrage a déjà été utilisé. Obtenez le code d'un membre actif." });
+      return;
+    }
   }
 
   res.json({
@@ -301,7 +314,7 @@ router.post("/auth/register", async (req, res) => {
     return;
   }
 
-  const referrer = await db.select({ id: usersTable.id })
+  const referrer = await db.select({ id: usersTable.id, referralCode: usersTable.referralCode })
     .from(usersTable)
     .where(eq(usersTable.referralCode, referralCode.toUpperCase()))
     .limit(1);
@@ -309,6 +322,19 @@ router.post("/auth/register", async (req, res) => {
   if (!referrer.length) {
     res.status(400).json({ error: "Bad Request", message: "Invalid referral code" });
     return;
+  }
+
+  // ECFSTART is a one-time use platform starter code
+  const PLATFORM_CODE = (process.env.PLATFORM_REF_CODE || "ECFSTART").toUpperCase();
+  if (referralCode.toUpperCase() === PLATFORM_CODE) {
+    const existingReferrals = await db.select({ id: referralsTable.id })
+      .from(referralsTable)
+      .where(eq(referralsTable.referrerId, referrer[0].id))
+      .limit(1);
+    if (existingReferrals.length > 0) {
+      res.status(400).json({ error: "Bad Request", message: "Ce code de démarrage a déjà été utilisé. Demandez le code de parrainage d'un membre actif." });
+      return;
+    }
   }
 
   const existing = await db.select({ id: usersTable.id })
@@ -485,7 +511,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const users = await db.select({ id: usersTable.id, email: usersTable.email })
+  const users = await db.select({ id: usersTable.id, email: usersTable.email, phone: usersTable.phone })
     .from(usersTable)
     .where(eq(usersTable.id, authReq.userId))
     .limit(1);
@@ -495,7 +521,8 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const { email } = users[0];
+  const { email, phone } = users[0];
+  const method = (req.body?.method as string) || "email";
   const otp = generateOtp();
   const key = `otp:${email}`;
 
@@ -506,11 +533,45 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
     attempts: 0,
   });
 
+  if (method === "sms" || method === "whatsapp") {
+    const hasTwilio = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE;
+    if (hasTwilio) {
+      try {
+        const accountSid = process.env.TWILIO_ACCOUNT_SID!;
+        const authToken = process.env.TWILIO_AUTH_TOKEN!;
+        const fromPhone = process.env.TWILIO_PHONE!;
+        const toPhone = phone || "";
+        if (toPhone) {
+          const body = `Votre code Ecrossflow : ${otp}. Valable 10 minutes.`;
+          const twilioTo = method === "whatsapp" ? `whatsapp:${toPhone}` : toPhone;
+          const twilioFrom = method === "whatsapp" ? `whatsapp:${fromPhone}` : fromPhone;
+          const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
+            method: "POST",
+            headers: {
+              Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({ To: twilioTo, From: twilioFrom, Body: body }).toString(),
+          });
+          if (!resp.ok) throw new Error("Twilio error");
+          console.log(`[OTP] ${method.toUpperCase()} sent to ${toPhone}`);
+          res.json({ message: "OTP sent", method, email });
+          return;
+        }
+      } catch (err) {
+        console.warn(`[OTP] ${method} delivery failed, falling back to email`, err);
+      }
+    } else {
+      console.log(`[OTP] ${method.toUpperCase()} not configured, falling back to email`);
+    }
+  }
+
+  // Default: email
   await sendEmail(buildOtpEmail(otp, email)).catch(() => {
     console.warn(`[OTP] Email delivery failed for ${email}`);
   });
 
-  res.json({ message: "OTP sent", email });
+  res.json({ message: "OTP sent", method: "email", email });
 });
 
 router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
