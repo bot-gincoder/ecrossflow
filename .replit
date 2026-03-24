@@ -28,6 +28,11 @@ timeoutMs = 20000
 [userenv]
 
 [userenv.shared]
+SMTP_HOST = "smtp.elasticemail.com"
+SMTP_PORT = "2525"
+SMTP_USER = "support@ecrossflow.com"
+SMTP_FROM = "support@ecrossflow.com"
+TWILIO_PHONE = "+13186468032"
 
 [nix]
 channel = "stable-25_05"
