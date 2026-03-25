@@ -8,6 +8,8 @@ import { createHash, randomUUID } from "crypto";
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
 const router: IRouter = Router();
+let otpInfraReady = false;
+let otpInfraPromise: Promise<void> | null = null;
 
 function generateOtp(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -52,6 +54,41 @@ function parsePositiveAmount(value: unknown): number | null {
   const num = typeof value === "string" ? parseFloat(value) : typeof value === "number" ? value : NaN;
   if (!Number.isFinite(num) || num <= 0) return null;
   return num;
+}
+
+async function ensureOtpInfra(): Promise<void> {
+  if (otpInfraReady) return;
+  if (otpInfraPromise) return otpInfraPromise;
+  otpInfraPromise = (async () => {
+    await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE otp_purpose AS ENUM ('EMAIL_VERIFICATION','WITHDRAWAL');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS otp_codes (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id uuid NOT NULL REFERENCES users(id),
+        purpose otp_purpose NOT NULL,
+        code_hash varchar(128) NOT NULL,
+        amount_usd numeric(18,2),
+        attempts integer NOT NULL DEFAULT 0,
+        max_attempts integer NOT NULL DEFAULT 5,
+        expires_at timestamptz NOT NULL,
+        consumed_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_user_purpose_created ON otp_codes(user_id, purpose, created_at);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_expires_at ON otp_codes(expires_at);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_consumed_at ON otp_codes(consumed_at);`);
+    otpInfraReady = true;
+  })();
+  try {
+    await otpInfraPromise;
+  } finally {
+    otpInfraPromise = null;
+  }
 }
 
 async function requireWithdrawKycApproved(userId: string): Promise<null | { status: 403; message: string }> {
@@ -206,6 +243,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 });
 
 router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: AuthRequest, res) => {
+  await ensureOtpInfra();
   const { amount, currency } = req.body;
   const kycGate = await requireWithdrawKycApproved(req.userId!);
   if (kycGate) {
@@ -274,6 +312,7 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
 });
 
 router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
+  await ensureOtpInfra();
   const { amount, currency, paymentMethod, destination, otp } = req.body;
   const kycGate = await requireWithdrawKycApproved(req.userId!);
   if (kycGate) {

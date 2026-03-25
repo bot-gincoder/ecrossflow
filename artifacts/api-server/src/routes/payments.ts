@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
 import { createHmac, timingSafeEqual } from "crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   paymentEventsTable,
@@ -10,6 +10,8 @@ import {
 } from "@workspace/db";
 
 const router: IRouter = Router();
+let paymentsInfraReady = false;
+let paymentsInfraPromise: Promise<void> | null = null;
 
 type WebhookStatus = "COMPLETED" | "FAILED" | "CANCELLED";
 type CanonicalWebhook = {
@@ -87,6 +89,43 @@ function canonicalizePayload(provider: string, payload: Record<string, unknown>)
     currency: generic.currency,
     providerTxId: generic.providerTxId || undefined,
   };
+}
+
+async function ensurePaymentsInfra(): Promise<void> {
+  if (paymentsInfraReady) return;
+  if (paymentsInfraPromise) return paymentsInfraPromise;
+  paymentsInfraPromise = (async () => {
+    await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE payment_event_status AS ENUM ('RECEIVED','PROCESSED','IGNORED','FAILED');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS payment_events (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        provider varchar(30) NOT NULL,
+        event_id varchar(120) NOT NULL,
+        event_type varchar(50) NOT NULL,
+        reference_id varchar(100),
+        transaction_id uuid REFERENCES transactions(id),
+        status payment_event_status NOT NULL DEFAULT 'RECEIVED',
+        payload jsonb NOT NULL,
+        error text,
+        received_at timestamptz NOT NULL DEFAULT now(),
+        processed_at timestamptz
+      );
+    `);
+    await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_events_provider_event_id ON payment_events(provider, event_id);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_reference ON payment_events(reference_id);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_transaction ON payment_events(transaction_id);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_status_received ON payment_events(status, received_at);`);
+    paymentsInfraReady = true;
+  })();
+  try {
+    await paymentsInfraPromise;
+  } finally {
+    paymentsInfraPromise = null;
+  }
 }
 
 async function processWebhookEvent(provider: string, canonical: CanonicalWebhook, payload: Record<string, unknown>) {
@@ -259,6 +298,7 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
 }
 
 router.post("/payments/webhook/:provider", async (req, res) => {
+  await ensurePaymentsInfra();
   const provider = normalizeProvider(String(req.params.provider || ""));
   const timestamp = String(req.get("x-ecrossflow-timestamp") || "");
   const signature = String(req.get("x-ecrossflow-signature") || "");

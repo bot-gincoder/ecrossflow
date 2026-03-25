@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { db } from "@workspace/db";
 import { usersTable, walletsTable, referralsTable, notificationsTable, otpCodesTable } from "@workspace/db";
-import { and, desc, eq, isNull, or } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { sendEmail, buildOtpEmail } from "../services/email.js";
 import { OAuth2Client } from "google-auth-library";
@@ -11,6 +11,8 @@ import { createHash } from "crypto";
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
   : null;
+let otpInfraReady = false;
+let otpInfraPromise: Promise<void> | null = null;
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -20,7 +22,43 @@ function hashOtp(otp: string): string {
   return createHash("sha256").update(otp).digest("hex");
 }
 
+async function ensureOtpInfra(): Promise<void> {
+  if (otpInfraReady) return;
+  if (otpInfraPromise) return otpInfraPromise;
+  otpInfraPromise = (async () => {
+    await db.execute(sql`
+      DO $$ BEGIN
+        CREATE TYPE otp_purpose AS ENUM ('EMAIL_VERIFICATION','WITHDRAWAL');
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS otp_codes (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id uuid NOT NULL REFERENCES users(id),
+        purpose otp_purpose NOT NULL,
+        code_hash varchar(128) NOT NULL,
+        amount_usd numeric(18,2),
+        attempts integer NOT NULL DEFAULT 0,
+        max_attempts integer NOT NULL DEFAULT 5,
+        expires_at timestamptz NOT NULL,
+        consumed_at timestamptz,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_user_purpose_created ON otp_codes(user_id, purpose, created_at);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_expires_at ON otp_codes(expires_at);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_consumed_at ON otp_codes(consumed_at);`);
+    otpInfraReady = true;
+  })();
+  try {
+    await otpInfraPromise;
+  } finally {
+    otpInfraPromise = null;
+  }
+}
+
 async function saveOtpCode(userId: string, otp: string) {
+  await ensureOtpInfra();
   const now = new Date();
   await db.transaction(async (tx) => {
     await tx.update(otpCodesTable)
@@ -613,6 +651,7 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
 });
 
 router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
+  await ensureOtpInfra();
   const authReq = req as AuthRequest;
 
   if (!authReq.userId) {
