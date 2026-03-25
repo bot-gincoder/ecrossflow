@@ -231,7 +231,7 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
             .where(eq(transactionsTable.id, paymentTx.id));
         }
       } else if (paymentTx.type === "WITHDRAWAL") {
-        if (canonical.status === "COMPLETED" && paymentTx.status === "PROCESSING") {
+        if (canonical.status === "COMPLETED" && (paymentTx.status === "PROCESSING" || paymentTx.status === "PENDING")) {
           const amount = parseFloat(paymentTx.amountUsd);
           try {
             await settleBlockedToTreasury(tx, {
@@ -266,7 +266,7 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
             actionUrl: "/wallet",
             read: false,
           });
-        } else if ((canonical.status === "FAILED" || canonical.status === "CANCELLED") && paymentTx.status === "PROCESSING") {
+        } else if ((canonical.status === "FAILED" || canonical.status === "CANCELLED") && (paymentTx.status === "PROCESSING" || paymentTx.status === "PENDING")) {
           const amount = parseFloat(paymentTx.amountUsd);
           try {
             await releaseBlockedToAvailable(tx, {

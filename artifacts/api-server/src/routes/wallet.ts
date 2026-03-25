@@ -12,7 +12,13 @@ import {
 import { eq, desc, and, gte, lte, sql, isNull, or, aliasedTable, count } from "drizzle-orm";
 import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { createHash, randomUUID } from "crypto";
-import { ensureLedgerInfra, ensureWalletAndLedgerAccounts, moveAvailableToBlocked } from "../lib/ledger.js";
+import {
+  creditAvailableFromTreasury,
+  ensureLedgerInfra,
+  ensureWalletAndLedgerAccounts,
+  moveAvailableToBlocked,
+} from "../lib/ledger.js";
+import { isMoncashAutoDepositEnabled, moncashCreatePayment, moncashRetrieveOrderPayment } from "../services/moncash.js";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
@@ -296,6 +302,35 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     throw error;
   }
 
+  let checkoutUrl: string | null = null;
+  if (String(paymentMethod).toUpperCase() === "MONCASH" && isMoncashAutoDepositEnabled()) {
+    try {
+      const payment = await moncashCreatePayment(String(tx.referenceId || tx.id), parseFloat(tx.amount));
+      checkoutUrl = payment.checkoutUrl;
+      const nextMeta = {
+        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
+        provider: "MONCASH",
+        moncash: {
+          paymentToken: payment.paymentToken,
+          checkoutUrl: payment.checkoutUrl,
+          initiatedAt: new Date().toISOString(),
+        },
+      };
+      await db.update(transactionsTable)
+        .set({ metadata: nextMeta, updatedAt: new Date() })
+        .where(eq(transactionsTable.id, tx.id));
+    } catch (error) {
+      const nextMeta = {
+        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
+        provider: "MONCASH",
+        moncashError: error instanceof Error ? error.message : "MONCASH_CREATE_PAYMENT_FAILED",
+      };
+      await db.update(transactionsTable)
+        .set({ metadata: nextMeta, updatedAt: new Date() })
+        .where(eq(transactionsTable.id, tx.id));
+    }
+  }
+
   res.status(201).json({
     id: tx.id,
     type: tx.type,
@@ -307,8 +342,122 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     referenceId: tx.referenceId,
     fromBoard: tx.fromBoard,
     description: tx.description,
+    checkoutUrl,
     createdAt: tx.createdAt,
     updatedAt: tx.updatedAt,
+  });
+});
+
+router.post("/wallet/deposit/:id/confirm-moncash", requireAuth as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const id = String(req.params.id || "");
+  const rows = await db.select().from(transactionsTable)
+    .where(and(
+      eq(transactionsTable.id, id),
+      eq(transactionsTable.userId, req.userId!),
+      eq(transactionsTable.type, "DEPOSIT"),
+    ))
+    .limit(1);
+
+  if (!rows.length) {
+    res.status(404).json({ error: "Not Found", message: "Deposit transaction not found" });
+    return;
+  }
+
+  const depositTx = rows[0];
+  if ((depositTx.paymentMethod || "").toUpperCase() !== "MONCASH") {
+    res.status(400).json({ error: "Bad Request", message: "This endpoint only supports MONCASH deposits" });
+    return;
+  }
+  if (!depositTx.referenceId) {
+    res.status(400).json({ error: "Bad Request", message: "Deposit reference is missing" });
+    return;
+  }
+
+  if (depositTx.status === "COMPLETED") {
+    res.json({ ok: true, status: "COMPLETED", message: "Deposit already confirmed" });
+    return;
+  }
+  if (depositTx.status !== "PENDING") {
+    res.status(409).json({ error: "Conflict", message: `Deposit is in status ${depositTx.status}` });
+    return;
+  }
+
+  let moncashResult;
+  try {
+    moncashResult = await moncashRetrieveOrderPayment(depositTx.referenceId);
+  } catch (error) {
+    res.status(502).json({
+      error: "Bad Gateway",
+      message: "Unable to reach MonCash API",
+      detail: error instanceof Error ? error.message : "MONCASH_CALL_FAILED",
+    });
+    return;
+  }
+
+  if (!moncashResult.successful) {
+    res.status(409).json({
+      error: "Conflict",
+      message: "MonCash payment not confirmed yet",
+      providerMessage: moncashResult.message,
+    });
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const txRows = await tx.select().from(transactionsTable)
+      .where(eq(transactionsTable.id, depositTx.id))
+      .for("update")
+      .limit(1);
+    if (!txRows.length) throw new Error("TX_NOT_FOUND");
+    const current = txRows[0];
+    if (current.status === "COMPLETED") return;
+    if (current.status !== "PENDING") throw new Error(`BAD_STATUS:${current.status}`);
+
+    await creditAvailableFromTreasury(tx, {
+      userId: current.userId,
+      transactionId: current.id,
+      amountUsd: parseFloat(current.amountUsd),
+      currency: "USD",
+      idempotencyKey: `deposit:settle:${current.id}`,
+      description: `Deposit confirmed by MonCash ${current.referenceId || current.id}`,
+      metadata: {
+        provider: "MONCASH",
+        providerTxId: moncashResult.transactionId,
+        payer: moncashResult.payer,
+        phase: "DEPOSIT_SETTLED",
+      },
+    });
+
+    const nextMeta = {
+      ...(current.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {}),
+      provider: "MONCASH",
+      providerTxId: moncashResult.transactionId,
+      payer: moncashResult.payer,
+      moncashMessage: moncashResult.message,
+      settledAt: new Date().toISOString(),
+    };
+
+    await tx.update(transactionsTable)
+      .set({ status: "COMPLETED", updatedAt: new Date(), metadata: nextMeta })
+      .where(eq(transactionsTable.id, current.id));
+
+    await tx.insert(notificationsTable).values({
+      userId: current.userId,
+      type: "DEPOSIT_SETTLED",
+      title: "Dépôt confirmé",
+      message: `Votre dépôt ${current.referenceId || current.id} a été confirmé par MonCash.`,
+      category: "financial",
+      actionUrl: "/wallet",
+      read: false,
+    });
+  });
+
+  res.json({
+    ok: true,
+    status: "COMPLETED",
+    provider: "MONCASH",
+    providerTxId: moncashResult.transactionId,
   });
 });
 
@@ -499,7 +648,7 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
         amount: amountNum.toFixed(2),
         currency: String(currency),
         amountUsd: amountUsd.toFixed(2),
-        status: "PROCESSING",
+        status: "PENDING",
         paymentMethod: String(paymentMethod) as PaymentMethodValue,
         referenceId: operationRef("WDR"),
         description: `Withdrawal to ${destinationValue}`,

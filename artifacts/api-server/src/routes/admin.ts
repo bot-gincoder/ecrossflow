@@ -20,11 +20,30 @@ import {
   releaseBlockedToAvailable,
   settleBlockedToTreasury,
 } from "../lib/ledger.js";
+import {
+  evaluateAutoPayoutPilot,
+  isMoncashAutoWithdrawEnabled,
+  moncashReferenceForWithdrawal,
+  moncashRetrieveOrderPayment,
+  moncashTransfer,
+} from "../services/moncash.js";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isValidId = (id: string) => UUID_RE.test(id);
+
+function parseDestination(metadata: unknown, description: string | null): string {
+  if (metadata && typeof metadata === "object" && "destination" in metadata) {
+    const v = (metadata as Record<string, unknown>).destination;
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  if (description) {
+    const m = /^Withdrawal to (.+)$/i.exec(description.trim());
+    if (m?.[1]) return m[1].trim();
+  }
+  return "";
+}
 
 router.get("/admin/stats", requireAdmin as never, async (req: AuthRequest, res) => {
   const now = new Date();
@@ -38,7 +57,10 @@ router.get("/admin/stats", requireAdmin as never, async (req: AuthRequest, res) 
   const [pendingDeposits] = await db.select({ count: count() }).from(transactionsTable)
     .where(and(eq(transactionsTable.type, "DEPOSIT"), eq(transactionsTable.status, "PENDING")));
   const [pendingWithdrawals] = await db.select({ count: count() }).from(transactionsTable)
-    .where(and(eq(transactionsTable.type, "WITHDRAWAL"), eq(transactionsTable.status, "PROCESSING")));
+    .where(and(
+      eq(transactionsTable.type, "WITHDRAWAL"),
+      or(eq(transactionsTable.status, "PENDING"), eq(transactionsTable.status, "PROCESSING")),
+    ));
 
   const platformRevenue = await db.select({ amount: transactionsTable.amountUsd })
     .from(transactionsTable)
@@ -522,6 +544,116 @@ router.put("/admin/deposits/:id/reject", requireAdmin as never, async (req: Auth
   res.json({ message: "Deposit rejected" });
 });
 
+router.post("/admin/deposits/:id/sync-moncash", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const id = String(req.params.id);
+  if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
+
+  const rows = await db.select().from(transactionsTable)
+    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "DEPOSIT")))
+    .limit(1);
+  if (!rows.length) {
+    res.status(404).json({ error: "Not Found", message: "Deposit not found" });
+    return;
+  }
+  const row = rows[0];
+
+  if ((row.paymentMethod || "").toUpperCase() !== "MONCASH") {
+    res.status(400).json({ error: "Bad Request", message: "This action is only available for MonCash deposits" });
+    return;
+  }
+  if (!row.referenceId) {
+    res.status(400).json({ error: "Bad Request", message: "Missing reference ID" });
+    return;
+  }
+  if (row.status === "COMPLETED") {
+    res.json({ ok: true, status: "COMPLETED", message: "Deposit already settled" });
+    return;
+  }
+  if (row.status !== "PENDING") {
+    res.status(409).json({ error: "Conflict", message: `Deposit is in status ${row.status}` });
+    return;
+  }
+
+  let moncashResult;
+  try {
+    moncashResult = await moncashRetrieveOrderPayment(row.referenceId);
+  } catch (error) {
+    res.status(502).json({
+      error: "Bad Gateway",
+      message: "Unable to verify MonCash transaction",
+      detail: error instanceof Error ? error.message : "MONCASH_SYNC_FAILED",
+    });
+    return;
+  }
+
+  if (!moncashResult.successful) {
+    res.status(409).json({
+      error: "Conflict",
+      message: "MonCash transaction is not settled yet",
+      providerMessage: moncashResult.message,
+    });
+    return;
+  }
+
+  await db.transaction(async (txDb) => {
+    const txRows = await txDb.select().from(transactionsTable)
+      .where(eq(transactionsTable.id, row.id))
+      .for("update")
+      .limit(1);
+    if (!txRows.length) throw new Error("NOT_FOUND");
+    const current = txRows[0];
+    if (current.status === "COMPLETED") return;
+    if (current.status !== "PENDING") throw new Error(`BAD_STATUS:${current.status}`);
+
+    await creditAvailableFromTreasury(txDb, {
+      userId: current.userId,
+      transactionId: current.id,
+      amountUsd: parseFloat(current.amountUsd),
+      currency: "USD",
+      idempotencyKey: `deposit:settle:${current.id}`,
+      description: `Deposit synced from MonCash ${current.referenceId || current.id}`,
+      metadata: {
+        source: "ADMIN_SYNC_MONCASH",
+        provider: "MONCASH",
+        providerTxId: moncashResult.transactionId,
+        payer: moncashResult.payer,
+        adminId: req.userId || null,
+      },
+    });
+
+    const nextMeta = {
+      ...(current.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {}),
+      provider: "MONCASH",
+      providerTxId: moncashResult.transactionId,
+      payer: moncashResult.payer,
+      syncedByAdminAt: new Date().toISOString(),
+      syncedByAdminId: req.userId || null,
+    };
+
+    await txDb.update(transactionsTable)
+      .set({ status: "COMPLETED", updatedAt: new Date(), metadata: nextMeta })
+      .where(eq(transactionsTable.id, current.id));
+
+    await txDb.insert(notificationsTable).values({
+      userId: current.userId,
+      type: "DEPOSIT_APPROVED",
+      title: "Dépôt confirmé",
+      message: `Votre dépôt ${current.referenceId || current.id} a été confirmé via MonCash.`,
+      category: "financial",
+      actionUrl: "/wallet",
+      read: false,
+    });
+  });
+
+  res.json({
+    ok: true,
+    status: "COMPLETED",
+    provider: "MONCASH",
+    providerTxId: moncashResult.transactionId,
+  });
+});
+
 router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: AuthRequest, res) => {
   const ago24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const pending = await db.select({
@@ -536,7 +668,7 @@ router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: Auth
   })
   .from(transactionsTable)
   .innerJoin(usersTable, eq(transactionsTable.userId, usersTable.id))
-  .where(and(eq(transactionsTable.type, "WITHDRAWAL"), eq(transactionsTable.status, "PROCESSING")))
+  .where(and(eq(transactionsTable.type, "WITHDRAWAL"), eq(transactionsTable.status, "PENDING")))
   .orderBy(desc(transactionsTable.createdAt));
 
   const withdrawals = pending.map(w => ({
@@ -562,27 +694,155 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
   await ensureLedgerInfra();
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
+  let approvalOutcome: { mode: "manual" | "moncash-auto"; status: "COMPLETED" | "FAILED" } | null = null;
   try {
-    await db.transaction(async (txDb) => {
+    approvalOutcome = await db.transaction(async (txDb) => {
       const txRows = await txDb.select().from(transactionsTable)
         .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
         .for("update")
         .limit(1);
       if (!txRows.length) throw new Error("NOT_FOUND");
       const row = txRows[0];
-      if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+      if (row.status !== "PENDING" && row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      const amountUsd = parseFloat(row.amountUsd);
+      const baseMeta = (row.metadata && typeof row.metadata === "object")
+        ? row.metadata as Record<string, unknown>
+        : {};
+
+      const pilot = evaluateAutoPayoutPilot({
+        userId: row.userId,
+        amountUsd,
+        paymentMethod: row.paymentMethod,
+        currency: row.currency,
+      });
+      const autoMoncashEligible = isMoncashAutoWithdrawEnabled()
+        && row.status === "PENDING"
+        && row.paymentMethod === "MONCASH"
+        && pilot.allowed;
+
+      if (autoMoncashEligible) {
+        const destination = parseDestination(row.metadata, row.description);
+        if (!destination) throw new Error("MISSING_DESTINATION");
+
+        let transferResult;
+        try {
+          transferResult = await moncashTransfer({
+            reference: moncashReferenceForWithdrawal(row.id),
+            receiver: destination,
+            amount: parseFloat(row.amount),
+            description: `Withdrawal ${row.referenceId || row.id}`,
+          });
+        } catch (error) {
+          const nextMeta = {
+            ...baseMeta,
+            provider: "MONCASH",
+            autoPayoutError: error instanceof Error ? error.message : "MONCASH_TRANSFER_FAILED",
+            autoPayoutTriedAt: new Date().toISOString(),
+          };
+          await txDb.update(transactionsTable)
+            .set({ metadata: nextMeta, adminNote: "Auto payout dispatch failed. Retry required.", updatedAt: new Date() })
+            .where(eq(transactionsTable.id, row.id));
+          throw new Error("AUTO_PAYOUT_DISPATCH_FAILED");
+        }
+
+        if (!transferResult.successful) {
+          await releaseBlockedToAvailable(txDb, {
+            userId: row.userId,
+            transactionId: row.id,
+            amountUsd,
+            currency: "USD",
+            idempotencyKey: `withdraw:release:${row.id}`,
+            description: `Withdrawal auto payout failed ${row.referenceId || row.id}`,
+            metadata: {
+              source: "MONCASH_AUTO_PAYOUT_FAILED",
+              adminId: req.userId || null,
+              providerMessage: transferResult.message,
+            },
+          });
+
+          await txDb.update(transactionsTable)
+            .set({
+              status: "FAILED",
+              updatedAt: new Date(),
+              metadata: {
+                ...baseMeta,
+                provider: "MONCASH",
+                providerTxId: transferResult.transactionId,
+                providerMessage: transferResult.message,
+                autoPayout: "FAILED",
+              },
+              adminNote: "Auto payout failed. Funds released to available balance.",
+            })
+            .where(eq(transactionsTable.id, row.id));
+
+          await txDb.insert(notificationsTable).values({
+            userId: row.userId,
+            type: "WITHDRAWAL_REJECTED",
+            title: "Retrait non exécuté",
+            message: `Le retrait de ${row.amount} ${row.currency} n'a pas pu être exécuté automatiquement et a été remboursé.`,
+            category: "financial",
+            actionUrl: "/wallet",
+            read: false,
+          });
+
+          return { mode: "moncash-auto" as const, status: "FAILED" as const };
+        }
+
+        await settleBlockedToTreasury(txDb, {
+          userId: row.userId,
+          transactionId: row.id,
+          amountUsd,
+          currency: "USD",
+          idempotencyKey: `withdraw:settle:${row.id}`,
+          description: `Withdrawal auto paid ${row.referenceId || row.id}`,
+          metadata: {
+            source: "MONCASH_AUTO_PAYOUT",
+            adminId: req.userId || null,
+            providerTxId: transferResult.transactionId,
+          },
+        });
+
+        await txDb.update(transactionsTable)
+          .set({
+            status: "COMPLETED",
+            updatedAt: new Date(),
+            metadata: {
+              ...baseMeta,
+              provider: "MONCASH",
+              providerTxId: transferResult.transactionId,
+              providerMessage: transferResult.message,
+              autoPayout: "COMPLETED",
+              autoPayoutAt: new Date().toISOString(),
+            },
+          })
+          .where(eq(transactionsTable.id, row.id));
+
+        await txDb.insert(notificationsTable).values({
+          userId: row.userId,
+          type: "WITHDRAWAL_APPROVED",
+          title: "Retrait approuvé !",
+          message: `Votre retrait de ${row.amount} ${row.currency} a été exécuté via MonCash.`,
+          category: "financial",
+          actionUrl: "/wallet",
+          read: false,
+        });
+
+        return { mode: "moncash-auto" as const, status: "COMPLETED" as const };
+      }
 
       try {
         await settleBlockedToTreasury(txDb, {
           userId: row.userId,
           transactionId: row.id,
-          amountUsd: parseFloat(row.amountUsd),
+          amountUsd,
           currency: "USD",
           idempotencyKey: `withdraw:settle:${row.id}`,
           description: `Withdrawal approved ${row.referenceId || row.id}`,
           metadata: {
             source: "ADMIN_APPROVAL",
             adminId: req.userId || null,
+            pilotReason: pilot.allowed ? null : pilot.reason || "AUTO_PAYOUT_PILOT_RESTRICTED",
           },
         });
       } catch (error) {
@@ -591,7 +851,11 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
       }
 
       await txDb.update(transactionsTable)
-        .set({ status: "COMPLETED", updatedAt: new Date() })
+        .set({
+          status: "COMPLETED",
+          updatedAt: new Date(),
+          ...(pilot.allowed ? {} : { adminNote: `Auto payout skipped by pilot policy: ${pilot.reason}` }),
+        })
         .where(eq(transactionsTable.id, id));
 
       await txDb.insert(notificationsTable).values({
@@ -603,6 +867,8 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
         actionUrl: "/wallet",
         read: false,
       });
+
+      return { mode: "manual" as const, status: "COMPLETED" as const };
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : "";
@@ -614,10 +880,18 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
       res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${msg.split(":")[1]}` });
       return;
     }
+    if (msg === "MISSING_DESTINATION") {
+      res.status(400).json({ error: "Bad Request", message: "Withdrawal destination is missing" });
+      return;
+    }
+    if (msg === "AUTO_PAYOUT_DISPATCH_FAILED") {
+      res.status(502).json({ error: "Bad Gateway", message: "Auto payout dispatch failed. Transaction remains pending for retry." });
+      return;
+    }
     throw error;
   }
 
-  res.json({ message: "Withdrawal approved" });
+  res.json({ message: "Withdrawal approved", mode: approvalOutcome?.mode || "manual", status: approvalOutcome?.status || "COMPLETED" });
 });
 
 router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: AuthRequest, res) => {
@@ -637,7 +911,7 @@ router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: A
         .limit(1);
       if (!txRows.length) throw new Error("NOT_FOUND");
       const row = txRows[0];
-      if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+      if (row.status !== "PENDING" && row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
 
       try {
         await releaseBlockedToAvailable(txDb, {
@@ -781,6 +1055,114 @@ router.get("/admin/ledger/journal", requireAdmin as never, async (req: AuthReque
     total: Number(totalResult.count),
     page: pageNum,
     totalPages: Math.ceil(Number(totalResult.count) / limitNum),
+  });
+});
+
+router.get("/admin/ledger/reconciliation", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const tolerance = Number.parseFloat(String((req.query as Record<string, string>).tolerance || process.env.RECON_TOLERANCE_USD || "0.01"));
+  const toleranceValue = Number.isFinite(tolerance) && tolerance >= 0 ? tolerance : 0.01;
+
+  const walletRows = await db.select({
+    userId: walletsTable.userId,
+    username: usersTable.username,
+    walletAvailable: walletsTable.balanceUsd,
+    walletBlocked: walletsTable.balanceReserved,
+  })
+    .from(walletsTable)
+    .innerJoin(usersTable, eq(walletsTable.userId, usersTable.id));
+
+  const ledgerResult = await db.execute(sql`
+    SELECT
+      a.user_id::text AS user_id,
+      a.type::text AS type,
+      (
+        COALESCE(SUM(CASE WHEN le.credit_account_id = a.id AND le.status = 'POSTED' THEN le.amount ELSE 0 END), 0)
+        -
+        COALESCE(SUM(CASE WHEN le.debit_account_id = a.id AND le.status = 'POSTED' THEN le.amount ELSE 0 END), 0)
+      )::numeric(18,2) AS ledger_balance
+    FROM ledger_accounts a
+    LEFT JOIN ledger_entries le
+      ON le.credit_account_id = a.id OR le.debit_account_id = a.id
+    WHERE a.user_id IS NOT NULL
+      AND a.type IN ('USER_AVAILABLE', 'USER_BLOCKED')
+    GROUP BY a.user_id, a.type
+  `);
+
+  const ledgerByUser = new Map<string, { available: number; blocked: number }>();
+  for (const row of ledgerResult.rows as Array<Record<string, unknown>>) {
+    const userId = String(row.user_id || "");
+    const type = String(row.type || "");
+    const balance = Number.parseFloat(String(row.ledger_balance || "0"));
+    if (!userId) continue;
+    const current = ledgerByUser.get(userId) || { available: 0, blocked: 0 };
+    if (type === "USER_AVAILABLE") current.available = Number.isFinite(balance) ? balance : 0;
+    if (type === "USER_BLOCKED") current.blocked = Number.isFinite(balance) ? balance : 0;
+    ledgerByUser.set(userId, current);
+  }
+
+  const mismatches: Array<Record<string, unknown>> = [];
+  for (const row of walletRows) {
+    const expected = ledgerByUser.get(row.userId) || { available: 0, blocked: 0 };
+    const walletAvailable = Number.parseFloat(row.walletAvailable);
+    const walletBlocked = Number.parseFloat(row.walletBlocked);
+    const deltaAvailable = Number.parseFloat((walletAvailable - expected.available).toFixed(2));
+    const deltaBlocked = Number.parseFloat((walletBlocked - expected.blocked).toFixed(2));
+
+    if (Math.abs(deltaAvailable) > toleranceValue || Math.abs(deltaBlocked) > toleranceValue) {
+      mismatches.push({
+        userId: row.userId,
+        username: row.username,
+        walletAvailable: Number.parseFloat(walletAvailable.toFixed(2)),
+        ledgerAvailable: Number.parseFloat(expected.available.toFixed(2)),
+        walletBlocked: Number.parseFloat(walletBlocked.toFixed(2)),
+        ledgerBlocked: Number.parseFloat(expected.blocked.toFixed(2)),
+        deltaAvailable,
+        deltaBlocked,
+      });
+    }
+  }
+
+  const totals = walletRows.reduce((acc, row) => {
+    acc.walletAvailable += Number.parseFloat(row.walletAvailable);
+    acc.walletBlocked += Number.parseFloat(row.walletBlocked);
+    const ledger = ledgerByUser.get(row.userId) || { available: 0, blocked: 0 };
+    acc.ledgerAvailable += ledger.available;
+    acc.ledgerBlocked += ledger.blocked;
+    return acc;
+  }, { walletAvailable: 0, walletBlocked: 0, ledgerAvailable: 0, ledgerBlocked: 0 });
+
+  if (mismatches.length > 0 && String((req.query as Record<string, string>).notify || "false").toLowerCase() === "true") {
+    const admins = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.role, "ADMIN"));
+    if (admins.length) {
+      await db.insert(notificationsTable).values(
+        admins.map((a) => ({
+          userId: a.id,
+          type: "SYSTEM_ALERT",
+          title: "Alerte réconciliation ledger",
+          message: `${mismatches.length} compte(s) présentent un écart wallet/ledger.`,
+          category: "security" as const,
+          actionUrl: "/admin",
+          read: false,
+        })),
+      );
+    }
+  }
+
+  res.json({
+    ok: mismatches.length === 0,
+    tolerance: toleranceValue,
+    checkedUsers: walletRows.length,
+    mismatchCount: mismatches.length,
+    totals: {
+      walletAvailable: Number.parseFloat(totals.walletAvailable.toFixed(2)),
+      walletBlocked: Number.parseFloat(totals.walletBlocked.toFixed(2)),
+      ledgerAvailable: Number.parseFloat(totals.ledgerAvailable.toFixed(2)),
+      ledgerBlocked: Number.parseFloat(totals.ledgerBlocked.toFixed(2)),
+    },
+    mismatches,
   });
 });
 
