@@ -1,4 +1,4 @@
-import { createHmac } from "crypto";
+import { createHash, createHmac } from "crypto";
 
 type Json = Record<string, unknown>;
 
@@ -44,6 +44,42 @@ function webhookSignature(timestamp: number, payload: string): string {
   return createHmac("sha256", WEBHOOK_SECRET)
     .update(`${timestamp}.${payload}`)
     .digest("hex");
+}
+
+function hashOtp(otp: string): string {
+  return createHash("sha256").update(otp).digest("hex");
+}
+
+async function recoverOtpFromDb(userId: string, amountUsd: number): Promise<string | null> {
+  if (!process.env.DATABASE_URL) return null;
+
+  const [{ db, otpCodesTable }, { and, desc, eq, isNull }] = await Promise.all([
+    import("@workspace/db"),
+    import("drizzle-orm"),
+  ]);
+
+  const rows = await db.select({
+    codeHash: otpCodesTable.codeHash,
+    amountUsd: otpCodesTable.amountUsd,
+  })
+    .from(otpCodesTable)
+    .where(and(
+      eq(otpCodesTable.userId, userId),
+      eq(otpCodesTable.purpose, "WITHDRAWAL"),
+      isNull(otpCodesTable.consumedAt),
+    ))
+    .orderBy(desc(otpCodesTable.createdAt))
+    .limit(1);
+
+  if (!rows.length) return null;
+  const row = rows[0];
+  if (row.amountUsd !== null && Math.abs(Number.parseFloat(row.amountUsd) - amountUsd) > 0.01) return null;
+
+  for (let i = 0; i <= 999999; i++) {
+    const candidate = String(i).padStart(6, "0");
+    if (hashOtp(candidate) === row.codeHash) return candidate;
+  }
+  return null;
 }
 
 async function run() {
@@ -117,7 +153,50 @@ async function run() {
     body: { amount: "3", currency: "USD" },
   });
   assert(withdrawAllowed.status === 200, `Withdraw OTP should pass after KYC approval: ${withdrawAllowed.status}`);
+  let withdrawOtp = String(withdrawAllowed.data.otp || "");
+  if (!withdrawOtp) {
+    withdrawOtp = (await recoverOtpFromDb(userId, 3)) || "";
+  }
+  assert(withdrawOtp, "Withdrawal OTP missing in demo mode");
   console.log("[E2E] withdraw after KYC approval OK");
+
+  const walletBeforeWithdraw = await api("GET", "/api/wallet", { token: userToken });
+  assert(walletBeforeWithdraw.status === 200, `Wallet before withdraw failed: ${walletBeforeWithdraw.status}`);
+  const beforeWithdrawAvailable = Number(walletBeforeWithdraw.data.balanceUsd || 0);
+  const beforeWithdrawBlocked = Number(walletBeforeWithdraw.data.balanceReserved || 0);
+
+  const withdrawCreate = await api("POST", "/api/wallet/withdraw", {
+    token: userToken,
+    body: {
+      amount: "3",
+      currency: "USD",
+      paymentMethod: "MONCASH",
+      destination: "E2E_TEST_DESTINATION",
+      otp: withdrawOtp,
+    },
+  });
+  assert(withdrawCreate.status === 201, `Create withdrawal failed: ${withdrawCreate.status}`);
+  const withdrawalId = String(withdrawCreate.data.id || "");
+  assert(withdrawalId, "Withdrawal id missing");
+
+  const walletAfterHold = await api("GET", "/api/wallet", { token: userToken });
+  assert(walletAfterHold.status === 200, `Wallet after withdrawal hold failed: ${walletAfterHold.status}`);
+  const afterHoldAvailable = Number(walletAfterHold.data.balanceUsd || 0);
+  const afterHoldBlocked = Number(walletAfterHold.data.balanceReserved || 0);
+  assert(afterHoldAvailable <= beforeWithdrawAvailable - 3, "Withdrawal hold did not reduce available balance");
+  assert(afterHoldBlocked >= beforeWithdrawBlocked + 3, "Withdrawal hold did not increase blocked balance");
+
+  const withdrawApprove = await api("PUT", `/api/admin/withdrawals/${withdrawalId}/approve`, {
+    token: adminToken,
+    body: {},
+  });
+  assert(withdrawApprove.status === 200, `Admin withdrawal approve failed: ${withdrawApprove.status}`);
+
+  const walletAfterSettle = await api("GET", "/api/wallet", { token: userToken });
+  assert(walletAfterSettle.status === 200, `Wallet after withdrawal settle failed: ${walletAfterSettle.status}`);
+  const afterSettleBlocked = Number(walletAfterSettle.data.balanceReserved || 0);
+  assert(afterSettleBlocked <= beforeWithdrawBlocked + 0.01, "Withdrawal settle did not release blocked balance");
+  console.log("[E2E] withdrawal hold/settle via ledger OK");
 
   const walletBefore = await api("GET", "/api/wallet", { token: userToken });
   assert(walletBefore.status === 200, `Wallet before failed: ${walletBefore.status}`);
@@ -202,6 +281,17 @@ async function run() {
   const afterUsd = Number(walletAfter.data.balanceUsd || 0);
   assert(afterUsd >= beforeUsd + 9, `Wallet credit mismatch: before=${beforeUsd}, after=${afterUsd}`);
   console.log("[E2E] wallet credited OK");
+
+  const userLedger = await api("GET", "/api/wallet/ledger?limit=10", { token: userToken });
+  assert(userLedger.status === 200, `User ledger endpoint failed: ${userLedger.status}`);
+  const userLedgerEntries = Array.isArray(userLedger.data.entries) ? userLedger.data.entries : [];
+  assert(userLedgerEntries.length > 0, "User ledger should contain entries");
+
+  const adminLedger = await api("GET", "/api/admin/ledger/journal?limit=10", { token: adminToken });
+  assert(adminLedger.status === 200, `Admin ledger endpoint failed: ${adminLedger.status}`);
+  const adminLedgerEntries = Array.isArray(adminLedger.data.entries) ? adminLedger.data.entries : [];
+  assert(adminLedgerEntries.length > 0, "Admin ledger should contain entries");
+  console.log("[E2E] ledger history endpoints OK");
 
   console.log("[E2E] ALL CHECKS PASSED");
 }

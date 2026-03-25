@@ -1,9 +1,18 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { walletsTable, transactionsTable, notificationsTable, otpCodesTable, usersTable } from "@workspace/db";
-import { eq, desc, and, gte, lte, sql, isNull } from "drizzle-orm";
+import {
+  walletsTable,
+  transactionsTable,
+  notificationsTable,
+  otpCodesTable,
+  usersTable,
+  ledgerEntriesTable,
+  ledgerAccountsTable,
+} from "@workspace/db";
+import { eq, desc, and, gte, lte, sql, isNull, or, aliasedTable, count } from "drizzle-orm";
 import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { createHash, randomUUID } from "crypto";
+import { ensureLedgerInfra, ensureWalletAndLedgerAccounts, moveAvailableToBlocked } from "../lib/ledger.js";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
@@ -104,25 +113,25 @@ async function requireWithdrawKycApproved(userId: string): Promise<null | { stat
 }
 
 router.get("/wallet", requireAuth as never, async (req: AuthRequest, res) => {
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
-  if (!wallets.length) {
-    await db.insert(walletsTable).values({
-      userId: req.userId!,
-      balanceUsd: "0",
-      balancePending: "0",
-      balanceReserved: "0",
-    });
-    res.json({ balanceUsd: 0, balancePending: 0, balanceReserved: 0, totalBalance: 0 });
-    return;
-  }
-  const w = wallets[0];
+  await ensureLedgerInfra();
+  const w = await db.transaction(async (tx) => {
+    await ensureWalletAndLedgerAccounts(tx, req.userId!, "USD");
+    const wallets = await tx.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
+    if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
+    return wallets[0];
+  });
+
   const balanceUsd = parseFloat(w.balanceUsd);
   const balancePending = parseFloat(w.balancePending);
   const balanceReserved = parseFloat(w.balanceReserved);
+  const accountingTotal = balanceUsd + balanceReserved;
   res.json({
     balanceUsd,
     balancePending,
     balanceReserved,
+    availableBalance: balanceUsd,
+    blockedBalance: balanceReserved,
+    accountingTotal,
     totalBalance: balanceUsd + balancePending + balanceReserved,
   });
 });
@@ -135,7 +144,67 @@ router.get("/wallet/rates", requireAuth as never, async (req: AuthRequest, res) 
   });
 });
 
+router.get("/wallet/ledger", requireAuth as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const { page = "1", limit = "25" } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
+  const limitNum = Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 25));
+  const offset = (pageNum - 1) * limitNum;
+
+  const debitAccount = aliasedTable(ledgerAccountsTable, "wallet_debit_account");
+  const creditAccount = aliasedTable(ledgerAccountsTable, "wallet_credit_account");
+  const whereClause = or(
+    eq(debitAccount.userId, req.userId!),
+    eq(creditAccount.userId, req.userId!),
+  );
+
+  const [totalResult] = await db.select({ count: count() })
+    .from(ledgerEntriesTable)
+    .innerJoin(debitAccount, eq(ledgerEntriesTable.debitAccountId, debitAccount.id))
+    .innerJoin(creditAccount, eq(ledgerEntriesTable.creditAccountId, creditAccount.id))
+    .where(whereClause);
+
+  const entries = await db.select({
+    id: ledgerEntriesTable.id,
+    transactionId: ledgerEntriesTable.transactionId,
+    amount: ledgerEntriesTable.amount,
+    currency: ledgerEntriesTable.currency,
+    status: ledgerEntriesTable.status,
+    description: ledgerEntriesTable.description,
+    metadata: ledgerEntriesTable.metadata,
+    createdAt: ledgerEntriesTable.createdAt,
+    debitType: debitAccount.type,
+    debitUserId: debitAccount.userId,
+    creditType: creditAccount.type,
+    creditUserId: creditAccount.userId,
+  })
+    .from(ledgerEntriesTable)
+    .innerJoin(debitAccount, eq(ledgerEntriesTable.debitAccountId, debitAccount.id))
+    .innerJoin(creditAccount, eq(ledgerEntriesTable.creditAccountId, creditAccount.id))
+    .where(whereClause)
+    .orderBy(desc(ledgerEntriesTable.createdAt))
+    .limit(limitNum)
+    .offset(offset);
+
+  res.json({
+    entries: entries.map((entry) => {
+      const isDebitUser = entry.debitUserId === req.userId!;
+      const isCreditUser = entry.creditUserId === req.userId!;
+      const direction = isDebitUser && isCreditUser ? "INTERNAL" : isCreditUser ? "IN" : "OUT";
+      return {
+        ...entry,
+        amount: parseFloat(entry.amount),
+        direction,
+      };
+    }),
+    total: Number(totalResult.count),
+    page: pageNum,
+    totalPages: Math.ceil(Number(totalResult.count) / limitNum),
+  });
+});
+
 router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
   const { amount, currency, paymentMethod, reference, notes, evidenceUrl } = req.body;
 
   if (!amount || !currency || !paymentMethod) {
@@ -178,6 +247,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
   let tx: typeof transactionsTable.$inferSelect;
   try {
     tx = await db.transaction(async (txDb) => {
+      await ensureWalletAndLedgerAccounts(txDb, req.userId!, "USD");
       if (reference) {
         // Serialize same external reference to guarantee idempotent deposit creation.
         await txDb.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${referenceId}))`);
@@ -244,6 +314,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
 router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: AuthRequest, res) => {
   await ensureOtpInfra();
+  await ensureLedgerInfra();
   const { amount, currency } = req.body;
   const kycGate = await requireWithdrawKycApproved(req.userId!);
   if (kycGate) {
@@ -273,6 +344,10 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
     });
     return;
   }
+
+  await db.transaction(async (tx) => {
+    await ensureWalletAndLedgerAccounts(tx, req.userId!, "USD");
+  });
 
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
   if (!wallets.length || parseFloat(wallets[0].balanceUsd) < amountUsd) {
@@ -313,6 +388,7 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
 
 router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
   await ensureOtpInfra();
+  await ensureLedgerInfra();
   const { amount, currency, paymentMethod, destination, otp } = req.body;
   const kycGate = await requireWithdrawKycApproved(req.userId!);
   if (kycGate) {
@@ -405,6 +481,8 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
         throw new Error("OTP_AMOUNT_MISMATCH");
       }
 
+      await ensureWalletAndLedgerAccounts(tx, req.userId!, "USD");
+
       const wallets = await tx.select()
         .from(walletsTable)
         .where(eq(walletsTable.userId, req.userId!))
@@ -414,10 +492,6 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
 
       const currentBalance = parseFloat(wallets[0].balanceUsd);
       if (currentBalance < amountUsd) throw new Error("INSUFFICIENT_FUNDS");
-
-      await tx.update(walletsTable)
-        .set({ balanceUsd: (currentBalance - amountUsd).toFixed(2), updatedAt: now })
-        .where(eq(walletsTable.userId, req.userId!));
 
       const [insertedTx] = await tx.insert(transactionsTable).values({
         userId: req.userId!,
@@ -435,6 +509,19 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
           userAgent: req.get("user-agent") || null,
         },
       }).returning();
+
+      await moveAvailableToBlocked(tx, {
+        userId: req.userId!,
+        transactionId: insertedTx.id,
+        amountUsd,
+        currency: "USD",
+        idempotencyKey: `withdraw:hold:${insertedTx.id}`,
+        description: `Withdrawal hold for ${insertedTx.referenceId || insertedTx.id}`,
+        metadata: {
+          destination: destinationValue,
+          phase: "WITHDRAW_HOLD",
+        },
+      });
 
       await tx.insert(notificationsTable).values({
         userId: req.userId!,

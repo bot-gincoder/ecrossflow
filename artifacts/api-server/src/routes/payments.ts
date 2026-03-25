@@ -5,9 +5,9 @@ import {
   db,
   paymentEventsTable,
   transactionsTable,
-  walletsTable,
   notificationsTable,
 } from "@workspace/db";
+import { creditAvailableFromTreasury, ensureLedgerInfra, releaseBlockedToAvailable, settleBlockedToTreasury } from "../lib/ledger.js";
 
 const router: IRouter = Router();
 let paymentsInfraReady = false;
@@ -197,17 +197,20 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
 
       if (paymentTx.type === "DEPOSIT") {
         if (canonical.status === "COMPLETED" && paymentTx.status !== "COMPLETED") {
-          const wallets = await tx.select().from(walletsTable)
-            .where(eq(walletsTable.userId, paymentTx.userId))
-            .for("update")
-            .limit(1);
-          if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
-
-          const current = parseFloat(wallets[0].balanceUsd);
           const amount = parseFloat(paymentTx.amountUsd);
-          await tx.update(walletsTable)
-            .set({ balanceUsd: (current + amount).toFixed(2), updatedAt: now })
-            .where(eq(walletsTable.userId, paymentTx.userId));
+          await creditAvailableFromTreasury(tx, {
+            userId: paymentTx.userId,
+            transactionId: paymentTx.id,
+            amountUsd: amount,
+            currency: "USD",
+            idempotencyKey: `deposit:settle:${paymentTx.id}`,
+            description: `Deposit settled ${paymentTx.referenceId || paymentTx.id}`,
+            metadata: {
+              provider,
+              providerTxId: canonical.providerTxId || null,
+              phase: "DEPOSIT_SETTLED",
+            },
+          });
 
           await tx.update(transactionsTable)
             .set({ status: "COMPLETED", updatedAt: now, metadata: nextMeta })
@@ -229,6 +232,27 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
         }
       } else if (paymentTx.type === "WITHDRAWAL") {
         if (canonical.status === "COMPLETED" && paymentTx.status === "PROCESSING") {
+          const amount = parseFloat(paymentTx.amountUsd);
+          try {
+            await settleBlockedToTreasury(tx, {
+              userId: paymentTx.userId,
+              transactionId: paymentTx.id,
+              amountUsd: amount,
+              currency: "USD",
+              idempotencyKey: `withdraw:settle:${paymentTx.id}`,
+              description: `Withdrawal settled ${paymentTx.referenceId || paymentTx.id}`,
+              metadata: {
+                provider,
+                providerTxId: canonical.providerTxId || null,
+                phase: "WITHDRAWAL_SETTLED",
+              },
+            });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : "WITHDRAW_SETTLE_FAILED";
+            // Legacy compatibility: old withdrawals already debited available directly.
+            if (reason !== "INSUFFICIENT_BLOCKED_BALANCE") throw error;
+          }
+
           await tx.update(transactionsTable)
             .set({ status: "COMPLETED", updatedAt: now, metadata: nextMeta })
             .where(eq(transactionsTable.id, paymentTx.id));
@@ -243,20 +267,46 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
             read: false,
           });
         } else if ((canonical.status === "FAILED" || canonical.status === "CANCELLED") && paymentTx.status === "PROCESSING") {
-          const wallets = await tx.select().from(walletsTable)
-            .where(eq(walletsTable.userId, paymentTx.userId))
-            .for("update")
-            .limit(1);
-          if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
-
-          const current = parseFloat(wallets[0].balanceUsd);
           const amount = parseFloat(paymentTx.amountUsd);
-          await tx.update(walletsTable)
-            .set({ balanceUsd: (current + amount).toFixed(2), updatedAt: now })
-            .where(eq(walletsTable.userId, paymentTx.userId));
+          try {
+            await releaseBlockedToAvailable(tx, {
+              userId: paymentTx.userId,
+              transactionId: paymentTx.id,
+              amountUsd: amount,
+              currency: "USD",
+              idempotencyKey: `withdraw:release:${paymentTx.id}`,
+              description: `Withdrawal released ${paymentTx.referenceId || paymentTx.id}`,
+              metadata: {
+                provider,
+                providerTxId: canonical.providerTxId || null,
+                phase: "WITHDRAWAL_RELEASED",
+              },
+            });
+          } catch (error) {
+            const reason = error instanceof Error ? error.message : "WITHDRAW_RELEASE_FAILED";
+            if (reason !== "INSUFFICIENT_BLOCKED_BALANCE") throw error;
+            await creditAvailableFromTreasury(tx, {
+              userId: paymentTx.userId,
+              transactionId: paymentTx.id,
+              amountUsd: amount,
+              currency: "USD",
+              idempotencyKey: `withdraw:legacy-refund:${paymentTx.id}`,
+              description: `Legacy withdrawal refund ${paymentTx.referenceId || paymentTx.id}`,
+              metadata: {
+                provider,
+                providerTxId: canonical.providerTxId || null,
+                phase: "WITHDRAWAL_LEGACY_REFUND",
+              },
+            });
+          }
 
           await tx.update(transactionsTable)
-            .set({ status: "CANCELLED", updatedAt: now, metadata: nextMeta, adminNote: "Auto-refunded by provider webhook" })
+            .set({
+              status: canonical.status === "FAILED" ? "FAILED" : "CANCELLED",
+              updatedAt: now,
+              metadata: nextMeta,
+              adminNote: "Auto-released by provider webhook",
+            })
             .where(eq(transactionsTable.id, paymentTx.id));
 
           await tx.insert(notificationsTable).values({
@@ -299,6 +349,7 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
 
 router.post("/payments/webhook/:provider", async (req, res) => {
   await ensurePaymentsInfra();
+  await ensureLedgerInfra();
   const provider = normalizeProvider(String(req.params.provider || ""));
   const timestamp = String(req.get("x-ecrossflow-timestamp") || "");
   const signature = String(req.get("x-ecrossflow-signature") || "");

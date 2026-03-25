@@ -1,8 +1,25 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { usersTable, walletsTable, transactionsTable, boardInstancesTable, boardParticipantsTable, boardsTable, notificationsTable } from "@workspace/db";
-import { eq, desc, ilike, and, count, or, gte, sql, lt } from "drizzle-orm";
+import {
+  usersTable,
+  walletsTable,
+  transactionsTable,
+  boardInstancesTable,
+  boardParticipantsTable,
+  boardsTable,
+  notificationsTable,
+  ledgerEntriesTable,
+  ledgerAccountsTable,
+} from "@workspace/db";
+import { eq, desc, ilike, and, count, or, gte, sql, lt, aliasedTable } from "drizzle-orm";
 import { requireAdmin, type AuthRequest } from "../middlewares/auth.js";
+import {
+  adjustAvailableWithTreasury,
+  creditAvailableFromTreasury,
+  ensureLedgerInfra,
+  releaseBlockedToAvailable,
+  settleBlockedToTreasury,
+} from "../lib/ledger.js";
 
 const router: IRouter = Router();
 
@@ -289,6 +306,7 @@ router.put("/admin/users/:id/kyc/reject", requireAdmin as never, async (req: Aut
 });
 
 router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
   const id = String(req.params.id);
   const { amount, note } = req.body;
   if (!amount || !note) {
@@ -303,21 +321,7 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req
 
   try {
     await db.transaction(async (tx) => {
-      const wallets = await tx.select().from(walletsTable)
-        .where(eq(walletsTable.userId, id))
-        .for("update")
-        .limit(1);
-      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
-
-      const currentBalance = parseFloat(wallets[0].balanceUsd);
-      const newBalance = currentBalance + delta;
-      if (newBalance < 0) throw new Error("NEGATIVE_BALANCE");
-
-      await tx.update(walletsTable)
-        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-        .where(eq(walletsTable.userId, id));
-
-      await tx.insert(transactionsTable).values({
+      const [adjustTx] = await tx.insert(transactionsTable).values({
         userId: id,
         type: "SYSTEM_FEE",
         amount: Math.abs(delta).toFixed(2),
@@ -327,6 +331,22 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req
         paymentMethod: "SYSTEM",
         adminNote: String(note),
         description: `${delta > 0 ? "Admin credit" : "Admin debit"}: ${String(note)}`,
+      }).returning({
+        id: transactionsTable.id,
+      });
+
+      await adjustAvailableWithTreasury(tx, {
+        userId: id,
+        deltaUsd: delta,
+        transactionId: adjustTx.id,
+        currency: "USD",
+        idempotencyKey: `admin:adjust:${adjustTx.id}`,
+        description: `${delta > 0 ? "Admin credit" : "Admin debit"}: ${String(note)}`,
+        metadata: {
+          adminId: req.userId || null,
+          note: String(note),
+          source: "ADMIN_PANEL",
+        },
       });
 
       await tx.insert(notificationsTable).values({
@@ -347,7 +367,7 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req
       res.status(404).json({ error: "Not Found", message: "Wallet not found" });
       return;
     }
-    if (msg === "NEGATIVE_BALANCE") {
+    if (msg === "INSUFFICIENT_AVAILABLE_BALANCE") {
       res.status(400).json({ error: "Bad Request", message: "Adjustment would result in negative balance" });
       return;
     }
@@ -397,6 +417,7 @@ router.get("/admin/deposits/pending", requireAdmin as never, async (req: AuthReq
 });
 
 router.put("/admin/deposits/:id/approve", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
   try {
@@ -410,20 +431,22 @@ router.put("/admin/deposits/:id/approve", requireAdmin as never, async (req: Aut
 
       if (row.status !== "PENDING") throw new Error(`BAD_STATUS:${row.status}`);
 
+      await creditAvailableFromTreasury(txDb, {
+        userId: row.userId,
+        transactionId: row.id,
+        amountUsd: parseFloat(row.amountUsd),
+        currency: "USD",
+        idempotencyKey: `deposit:settle:${row.id}`,
+        description: `Deposit approved ${row.referenceId || row.id}`,
+        metadata: {
+          source: "ADMIN_APPROVAL",
+          adminId: req.userId || null,
+        },
+      });
+
       await txDb.update(transactionsTable)
         .set({ status: "COMPLETED", updatedAt: new Date() })
         .where(eq(transactionsTable.id, id));
-
-      const wallets = await txDb.select().from(walletsTable)
-        .where(eq(walletsTable.userId, row.userId))
-        .for("update")
-        .limit(1);
-      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
-
-      const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(row.amountUsd);
-      await txDb.update(walletsTable)
-        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-        .where(eq(walletsTable.userId, row.userId));
 
       await txDb.insert(notificationsTable).values({
         userId: row.userId,
@@ -439,10 +462,6 @@ router.put("/admin/deposits/:id/approve", requireAdmin as never, async (req: Aut
     const msg = error instanceof Error ? error.message : "";
     if (msg === "NOT_FOUND") {
       res.status(404).json({ error: "Not Found", message: "Deposit not found" });
-      return;
-    }
-    if (msg === "WALLET_NOT_FOUND") {
-      res.status(404).json({ error: "Not Found", message: "Wallet not found" });
       return;
     }
     if (msg.startsWith("BAD_STATUS:")) {
@@ -540,6 +559,7 @@ router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: Auth
 });
 
 router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
   try {
@@ -551,6 +571,24 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
       if (!txRows.length) throw new Error("NOT_FOUND");
       const row = txRows[0];
       if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      try {
+        await settleBlockedToTreasury(txDb, {
+          userId: row.userId,
+          transactionId: row.id,
+          amountUsd: parseFloat(row.amountUsd),
+          currency: "USD",
+          idempotencyKey: `withdraw:settle:${row.id}`,
+          description: `Withdrawal approved ${row.referenceId || row.id}`,
+          metadata: {
+            source: "ADMIN_APPROVAL",
+            adminId: req.userId || null,
+          },
+        });
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : "WITHDRAW_SETTLE_FAILED";
+        if (reason !== "INSUFFICIENT_BLOCKED_BALANCE") throw error;
+      }
 
       await txDb.update(transactionsTable)
         .set({ status: "COMPLETED", updatedAt: new Date() })
@@ -583,6 +621,7 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
 });
 
 router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
   const { reason } = req.body;
@@ -600,20 +639,41 @@ router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: A
       const row = txRows[0];
       if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
 
+      try {
+        await releaseBlockedToAvailable(txDb, {
+          userId: row.userId,
+          transactionId: row.id,
+          amountUsd: parseFloat(row.amountUsd),
+          currency: "USD",
+          idempotencyKey: `withdraw:release:${row.id}`,
+          description: `Withdrawal rejected ${row.referenceId || row.id}`,
+          metadata: {
+            source: "ADMIN_REJECTION",
+            reason: String(reason),
+            adminId: req.userId || null,
+          },
+        });
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : "WITHDRAW_RELEASE_FAILED";
+        if (errMsg !== "INSUFFICIENT_BLOCKED_BALANCE") throw error;
+        await creditAvailableFromTreasury(txDb, {
+          userId: row.userId,
+          transactionId: row.id,
+          amountUsd: parseFloat(row.amountUsd),
+          currency: "USD",
+          idempotencyKey: `withdraw:legacy-refund:${row.id}`,
+          description: `Legacy withdrawal refund ${row.referenceId || row.id}`,
+          metadata: {
+            source: "ADMIN_REJECTION_LEGACY",
+            reason: String(reason),
+            adminId: req.userId || null,
+          },
+        });
+      }
+
       await txDb.update(transactionsTable)
         .set({ status: "CANCELLED", adminNote: reason, updatedAt: new Date() })
         .where(eq(transactionsTable.id, id));
-
-      const wallets = await txDb.select().from(walletsTable)
-        .where(eq(walletsTable.userId, row.userId))
-        .for("update")
-        .limit(1);
-      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
-
-      const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(row.amountUsd);
-      await txDb.update(walletsTable)
-        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-        .where(eq(walletsTable.userId, row.userId));
 
       await txDb.insert(notificationsTable).values({
         userId: row.userId,
@@ -643,6 +703,85 @@ router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: A
   }
 
   res.json({ message: "Withdrawal rejected and refunded" });
+});
+
+router.get("/admin/ledger/journal", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const { page = "1", limit = "50", userId, status, transactionId } = req.query as Record<string, string>;
+  const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
+  const limitNum = Math.min(200, Math.max(1, Number.parseInt(limit, 10) || 50));
+  const offset = (pageNum - 1) * limitNum;
+
+  if (userId && !isValidId(userId)) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid userId" });
+    return;
+  }
+  if (transactionId && !isValidId(transactionId)) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid transactionId" });
+    return;
+  }
+
+  const statusFilter = String(status || "").trim().toUpperCase();
+  if (statusFilter && statusFilter !== "POSTED" && statusFilter !== "REVERSED") {
+    res.status(400).json({ error: "Bad Request", message: "Invalid status filter" });
+    return;
+  }
+
+  const debitAccount = aliasedTable(ledgerAccountsTable, "debit_account");
+  const creditAccount = aliasedTable(ledgerAccountsTable, "credit_account");
+  const debitUser = aliasedTable(usersTable, "debit_user");
+  const creditUser = aliasedTable(usersTable, "credit_user");
+
+  const whereClause = and(
+    statusFilter ? eq(ledgerEntriesTable.status, statusFilter as "POSTED" | "REVERSED") : undefined,
+    transactionId ? eq(ledgerEntriesTable.transactionId, transactionId) : undefined,
+    userId ? or(eq(debitAccount.userId, userId), eq(creditAccount.userId, userId)) : undefined,
+  );
+
+  const [totalResult] = await db.select({ count: count() })
+    .from(ledgerEntriesTable)
+    .innerJoin(debitAccount, eq(ledgerEntriesTable.debitAccountId, debitAccount.id))
+    .innerJoin(creditAccount, eq(ledgerEntriesTable.creditAccountId, creditAccount.id))
+    .where(whereClause);
+
+  const entries = await db.select({
+    id: ledgerEntriesTable.id,
+    createdAt: ledgerEntriesTable.createdAt,
+    transactionId: ledgerEntriesTable.transactionId,
+    amount: ledgerEntriesTable.amount,
+    currency: ledgerEntriesTable.currency,
+    status: ledgerEntriesTable.status,
+    description: ledgerEntriesTable.description,
+    metadata: ledgerEntriesTable.metadata,
+    idempotencyKey: ledgerEntriesTable.idempotencyKey,
+    debitCode: debitAccount.code,
+    debitType: debitAccount.type,
+    debitUserId: debitAccount.userId,
+    debitUsername: debitUser.username,
+    creditCode: creditAccount.code,
+    creditType: creditAccount.type,
+    creditUserId: creditAccount.userId,
+    creditUsername: creditUser.username,
+  })
+    .from(ledgerEntriesTable)
+    .innerJoin(debitAccount, eq(ledgerEntriesTable.debitAccountId, debitAccount.id))
+    .innerJoin(creditAccount, eq(ledgerEntriesTable.creditAccountId, creditAccount.id))
+    .leftJoin(debitUser, eq(debitAccount.userId, debitUser.id))
+    .leftJoin(creditUser, eq(creditAccount.userId, creditUser.id))
+    .where(whereClause)
+    .orderBy(desc(ledgerEntriesTable.createdAt))
+    .limit(limitNum)
+    .offset(offset);
+
+  res.json({
+    entries: entries.map((entry) => ({
+      ...entry,
+      amount: parseFloat(entry.amount),
+    })),
+    total: Number(totalResult.count),
+    page: pageNum,
+    totalPages: Math.ceil(Number(totalResult.count) / limitNum),
+  });
 });
 
 router.get("/admin/boards", requireAdmin as never, async (req: AuthRequest, res) => {

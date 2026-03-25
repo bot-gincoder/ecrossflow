@@ -7,6 +7,7 @@ import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js
 import { sendEmail, buildOtpEmail } from "../services/email.js";
 import { OAuth2Client } from "google-auth-library";
 import { createHash } from "crypto";
+import { ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.js";
 
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
@@ -145,6 +146,7 @@ router.get("/auth/check-username", async (req, res) => {
 });
 
 router.post("/auth/google", async (req, res) => {
+  await ensureLedgerInfra();
   if (!googleClient && !process.env.GOOGLE_CLIENT_ID) {
     res.status(503).json({ error: "Service Unavailable", message: "Google authentication is not configured on this server." });
     return;
@@ -305,6 +307,7 @@ router.post("/auth/google", async (req, res) => {
       balancePending: "0",
       balanceReserved: "0",
     });
+    await ensureWalletAndLedgerAccounts(tx, createdUser.id, "USD");
 
     await tx.insert(referralsTable).values({
       referrerId: referrer[0].id,
@@ -350,6 +353,7 @@ router.post("/auth/google", async (req, res) => {
 });
 
 router.post("/auth/register", async (req, res) => {
+  await ensureLedgerInfra();
   const { firstName, lastName, username, email, password, referralCode, phone, preferredLanguage } = req.body;
 
   if (!firstName || !lastName || !username || !email || !password || !referralCode || !phone) {
@@ -434,6 +438,7 @@ router.post("/auth/register", async (req, res) => {
       balancePending: "0",
       balanceReserved: "0",
     });
+    await ensureWalletAndLedgerAccounts(tx, createdUser.id, "USD");
 
     await tx.insert(referralsTable).values({
       referrerId: referrer[0].id,

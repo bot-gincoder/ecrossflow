@@ -61,6 +61,129 @@ async function seed() {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_user_purpose_created ON otp_codes(user_id, purpose, created_at);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_expires_at ON otp_codes(expires_at);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_consumed_at ON otp_codes(consumed_at);`);
+  await db.execute(sql`
+    DO $$ BEGIN
+      CREATE TYPE ledger_account_type AS ENUM ('TREASURY','USER_AVAILABLE','USER_BLOCKED');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  `);
+  await db.execute(sql`
+    DO $$ BEGIN
+      CREATE TYPE ledger_entry_status AS ENUM ('POSTED','REVERSED');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ledger_accounts (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      code varchar(64) NOT NULL,
+      name varchar(120) NOT NULL,
+      type ledger_account_type NOT NULL,
+      user_id uuid REFERENCES users(id),
+      currency varchar(10) NOT NULL DEFAULT 'USD',
+      active boolean NOT NULL DEFAULT true,
+      created_at timestamptz NOT NULL DEFAULT now()
+    );
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ledger_entries (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      entry_group_id uuid NOT NULL DEFAULT gen_random_uuid(),
+      transaction_id uuid REFERENCES transactions(id),
+      debit_account_id uuid NOT NULL REFERENCES ledger_accounts(id),
+      credit_account_id uuid NOT NULL REFERENCES ledger_accounts(id),
+      amount numeric(18,2) NOT NULL,
+      currency varchar(10) NOT NULL DEFAULT 'USD',
+      status ledger_entry_status NOT NULL DEFAULT 'POSTED',
+      description text,
+      metadata jsonb,
+      idempotency_key varchar(150),
+      created_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT chk_ledger_entries_amount_positive CHECK (amount > 0),
+      CONSTRAINT chk_ledger_entries_distinct_accounts CHECK (debit_account_id <> credit_account_id)
+    );
+  `);
+  await db.execute(sql`ALTER TABLE ledger_entries ADD COLUMN IF NOT EXISTS idempotency_key varchar(150);`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_accounts_code ON ledger_accounts(code);`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_accounts_user_type_currency ON ledger_accounts(user_id, type, currency);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_accounts_type ON ledger_accounts(type);`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_ledger_entries_idempotency_key ON ledger_entries(idempotency_key) WHERE idempotency_key IS NOT NULL;`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_entries_transaction ON ledger_entries(transaction_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_entries_entry_group ON ledger_entries(entry_group_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_entries_created ON ledger_entries(created_at);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_entries_debit ON ledger_entries(debit_account_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_ledger_entries_credit ON ledger_entries(credit_account_id);`);
+  await db.execute(sql`
+    INSERT INTO ledger_accounts (code, name, type, user_id, currency, active)
+    VALUES ('TREASURY_USD', 'Main Treasury USD', 'TREASURY', NULL, 'USD', true)
+    ON CONFLICT (code) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_accounts (code, name, type, user_id, currency, active)
+    SELECT 'USER_AVAILABLE_' || w.user_id::text || '_USD', 'User Available USD', 'USER_AVAILABLE', w.user_id, 'USD', true
+    FROM wallets w
+    ON CONFLICT (code) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_accounts (code, name, type, user_id, currency, active)
+    SELECT 'USER_BLOCKED_' || w.user_id::text || '_USD', 'User Blocked USD', 'USER_BLOCKED', w.user_id, 'USD', true
+    FROM wallets w
+    ON CONFLICT (code) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_entries (
+      transaction_id,
+      debit_account_id,
+      credit_account_id,
+      amount,
+      currency,
+      status,
+      description,
+      metadata,
+      idempotency_key
+    )
+    SELECT
+      NULL,
+      treasury.id,
+      available.id,
+      w.balance_usd,
+      'USD',
+      'POSTED',
+      'Bootstrap available balance',
+      jsonb_build_object('source', 'seed-bootstrap', 'scope', 'available'),
+      'bootstrap:available:' || w.user_id::text
+    FROM wallets w
+    INNER JOIN ledger_accounts treasury ON treasury.code = 'TREASURY_USD'
+    INNER JOIN ledger_accounts available ON available.code = ('USER_AVAILABLE_' || w.user_id::text || '_USD')
+    WHERE w.balance_usd::numeric > 0
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_entries (
+      transaction_id,
+      debit_account_id,
+      credit_account_id,
+      amount,
+      currency,
+      status,
+      description,
+      metadata,
+      idempotency_key
+    )
+    SELECT
+      NULL,
+      treasury.id,
+      blocked.id,
+      w.balance_reserved,
+      'USD',
+      'POSTED',
+      'Bootstrap blocked balance',
+      jsonb_build_object('source', 'seed-bootstrap', 'scope', 'blocked'),
+      'bootstrap:blocked:' || w.user_id::text
+    FROM wallets w
+    INNER JOIN ledger_accounts treasury ON treasury.code = 'TREASURY_USD'
+    INNER JOIN ledger_accounts blocked ON blocked.code = ('USER_BLOCKED_' || w.user_id::text || '_USD')
+    WHERE w.balance_reserved::numeric > 0
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  `);
 
   console.log("Seeding boards...");
   for (const board of BOARDS) {
@@ -136,6 +259,48 @@ async function seed() {
       console.log("Board F instance created");
     }
   }
+
+  // Final backfill after potential user/admin creation in this seed run.
+  await db.execute(sql`
+    INSERT INTO ledger_accounts (code, name, type, user_id, currency, active)
+    SELECT 'USER_AVAILABLE_' || w.user_id::text || '_USD', 'User Available USD', 'USER_AVAILABLE', w.user_id, 'USD', true
+    FROM wallets w
+    ON CONFLICT (code) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_accounts (code, name, type, user_id, currency, active)
+    SELECT 'USER_BLOCKED_' || w.user_id::text || '_USD', 'User Blocked USD', 'USER_BLOCKED', w.user_id, 'USD', true
+    FROM wallets w
+    ON CONFLICT (code) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_entries (
+      transaction_id, debit_account_id, credit_account_id, amount, currency, status, description, metadata, idempotency_key
+    )
+    SELECT
+      NULL, treasury.id, available.id, w.balance_usd, 'USD', 'POSTED',
+      'Bootstrap available balance', jsonb_build_object('source', 'seed-bootstrap', 'scope', 'available'),
+      'bootstrap:available:' || w.user_id::text
+    FROM wallets w
+    INNER JOIN ledger_accounts treasury ON treasury.code = 'TREASURY_USD'
+    INNER JOIN ledger_accounts available ON available.code = ('USER_AVAILABLE_' || w.user_id::text || '_USD')
+    WHERE w.balance_usd::numeric > 0
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  `);
+  await db.execute(sql`
+    INSERT INTO ledger_entries (
+      transaction_id, debit_account_id, credit_account_id, amount, currency, status, description, metadata, idempotency_key
+    )
+    SELECT
+      NULL, treasury.id, blocked.id, w.balance_reserved, 'USD', 'POSTED',
+      'Bootstrap blocked balance', jsonb_build_object('source', 'seed-bootstrap', 'scope', 'blocked'),
+      'bootstrap:blocked:' || w.user_id::text
+    FROM wallets w
+    INNER JOIN ledger_accounts treasury ON treasury.code = 'TREASURY_USD'
+    INNER JOIN ledger_accounts blocked ON blocked.code = ('USER_BLOCKED_' || w.user_id::text || '_USD')
+    WHERE w.balance_reserved::numeric > 0
+    ON CONFLICT (idempotency_key) DO NOTHING;
+  `);
 
   console.log("Seed complete!");
   process.exit(0);
