@@ -1303,6 +1303,9 @@ components:
         evidenceUrl:
           type: string
           description: URL or object reference of the payment screenshot (Moncash/NatCash)
+        cryptoAsset:
+          $ref: "#/components/schemas/CryptoAsset"
+          description: Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON)
       required:
         - amount
         - currency
@@ -1323,6 +1326,9 @@ components:
         otp:
           type: string
           description: 6-digit OTP code obtained from POST /wallet/withdraw/request-otp
+        cryptoAsset:
+          $ref: "#/components/schemas/CryptoAsset"
+          description: Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON)
       required:
         - amount
         - currency
@@ -1411,6 +1417,18 @@ components:
         description:
           type: string
           nullable: true
+        checkoutUrl:
+          type: string
+          nullable: true
+        cryptoInstructions:
+          $ref: "#/components/schemas/CryptoDepositInstructions"
+          nullable: true
+        processingMode:
+          type: string
+          nullable: true
+        providerDispatch:
+          $ref: "#/components/schemas/ProviderDispatch"
+          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -1445,6 +1463,63 @@ components:
         - total
         - page
         - totalPages
+
+    CryptoAsset:
+      type: string
+      enum: [USDT_TRC20, USDT_POLYGON, USDC_POLYGON]
+
+    CryptoDepositInstructions:
+      type: object
+      properties:
+        provider:
+          type: string
+        paymentId:
+          type: string
+        payAddress:
+          type: string
+        payAmount:
+          type: number
+          nullable: true
+        payCurrency:
+          type: string
+        network:
+          type: string
+          nullable: true
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+        asset:
+          $ref: "#/components/schemas/CryptoAsset"
+        assetLabel:
+          type: string
+      required:
+        - provider
+        - paymentId
+        - payAddress
+        - payCurrency
+        - asset
+        - assetLabel
+
+    ProviderDispatch:
+      type: object
+      properties:
+        provider:
+          type: string
+        payoutId:
+          type: string
+        withdrawalId:
+          type: string
+        status:
+          type: string
+        asset:
+          $ref: "#/components/schemas/CryptoAsset"
+      required:
+        - provider
+        - payoutId
+        - withdrawalId
+        - status
+        - asset
 
     FinancialReport:
       type: object

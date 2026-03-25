@@ -5,6 +5,7 @@
  * Ecrossflow API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CryptoAsset } from "./cryptoAsset";
 import type { WithdrawalRequestPaymentMethod } from "./withdrawalRequestPaymentMethod";
 
 export interface WithdrawalRequest {
@@ -12,4 +13,8 @@ export interface WithdrawalRequest {
   currency: string;
   paymentMethod: WithdrawalRequestPaymentMethod;
   destination: string;
+  /** 6-digit OTP code obtained from POST /wallet/withdraw/request-otp */
+  otp: string;
+  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  cryptoAsset?: CryptoAsset;
 }

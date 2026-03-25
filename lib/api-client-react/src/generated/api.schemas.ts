@@ -192,13 +192,24 @@ export const DepositRequestPaymentMethod = {
   PAYPAL: "PAYPAL",
 } as const;
 
+export type CryptoAsset = (typeof CryptoAsset)[keyof typeof CryptoAsset];
+
+export const CryptoAsset = {
+  USDT_TRC20: "USDT_TRC20",
+  USDT_POLYGON: "USDT_POLYGON",
+  USDC_POLYGON: "USDC_POLYGON",
+} as const;
+
 export interface DepositRequest {
   amount: number;
   currency: string;
   paymentMethod: DepositRequestPaymentMethod;
   reference?: string;
   notes?: string;
+  /** URL or object reference of the payment screenshot (Moncash/NatCash) */
   evidenceUrl?: string;
+  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  cryptoAsset?: CryptoAsset;
 }
 
 export type WithdrawalRequestPaymentMethod =
@@ -218,7 +229,10 @@ export interface WithdrawalRequest {
   currency: string;
   paymentMethod: WithdrawalRequestPaymentMethod;
   destination: string;
+  /** 6-digit OTP code obtained from POST /wallet/withdraw/request-otp */
   otp: string;
+  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  cryptoAsset?: CryptoAsset;
 }
 
 export interface ConvertRequest {
@@ -270,6 +284,26 @@ export const TransactionStatus = {
   CANCELLED: "CANCELLED",
 } as const;
 
+export interface CryptoDepositInstructions {
+  provider: string;
+  paymentId: string;
+  payAddress: string;
+  payAmount?: number | null;
+  payCurrency: string;
+  network?: string | null;
+  expiresAt?: string | null;
+  asset: CryptoAsset;
+  assetLabel: string;
+}
+
+export interface ProviderDispatch {
+  provider: string;
+  payoutId: string;
+  withdrawalId: string;
+  status: string;
+  asset: CryptoAsset;
+}
+
 export interface Transaction {
   id: string;
   type: TransactionType;
@@ -281,6 +315,10 @@ export interface Transaction {
   referenceId?: string | null;
   fromBoard?: string | null;
   description?: string | null;
+  checkoutUrl?: string | null;
+  cryptoInstructions?: CryptoDepositInstructions | null;
+  processingMode?: string | null;
+  providerDispatch?: ProviderDispatch | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -534,6 +572,18 @@ export type GetMyBoardStatus200 = {
   statuses: UserBoardStatus[];
 };
 
+export type RequestWithdrawalOtpBody = {
+  amount: number;
+  currency: string;
+};
+
+export type RequestWithdrawalOtp200 = {
+  message: string;
+  /** Returned only in demo/development mode. Not sent in production. */
+  otp?: string;
+  expiresInSeconds: number;
+};
+
 export type GetTransactionsParams = {
   type?: string;
   status?: string;
@@ -541,10 +591,23 @@ export type GetTransactionsParams = {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
-  paymentMethod?: string;
+  paymentMethod?: GetTransactionsPaymentMethod;
   amountMin?: number;
   amountMax?: number;
 };
+
+export type GetTransactionsPaymentMethod =
+  (typeof GetTransactionsPaymentMethod)[keyof typeof GetTransactionsPaymentMethod];
+
+export const GetTransactionsPaymentMethod = {
+  MONCASH: "MONCASH",
+  NATCASH: "NATCASH",
+  CARD: "CARD",
+  BANK_TRANSFER: "BANK_TRANSFER",
+  CRYPTO: "CRYPTO",
+  PAYPAL: "PAYPAL",
+  SYSTEM: "SYSTEM",
+} as const;
 
 export type GetNotificationsParams = {
   page?: number;

@@ -7,7 +7,10 @@
  */
 
 export interface ConvertResponse {
+  success?: boolean;
   convertedAmount: number;
+  fromCurrency?: string;
+  toCurrency?: string;
   rate: number;
   fee: number;
 }

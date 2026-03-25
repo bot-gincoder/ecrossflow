@@ -5,6 +5,7 @@
  * Ecrossflow API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { GetTransactionsPaymentMethod } from "./getTransactionsPaymentMethod";
 
 export type GetTransactionsParams = {
   type?: string;
@@ -13,4 +14,7 @@ export type GetTransactionsParams = {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
+  paymentMethod?: GetTransactionsPaymentMethod;
+  amountMin?: number;
+  amountMax?: number;
 };

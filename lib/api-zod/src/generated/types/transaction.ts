@@ -5,6 +5,8 @@
  * Ecrossflow API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CryptoDepositInstructions } from "./cryptoDepositInstructions";
+import type { ProviderDispatch } from "./providerDispatch";
 import type { TransactionStatus } from "./transactionStatus";
 import type { TransactionType } from "./transactionType";
 
@@ -19,6 +21,10 @@ export interface Transaction {
   referenceId?: string | null;
   fromBoard?: string | null;
   description?: string | null;
+  checkoutUrl?: string | null;
+  cryptoInstructions?: CryptoDepositInstructions | null;
+  processingMode?: string | null;
+  providerDispatch?: ProviderDispatch | null;
   createdAt: Date;
   updatedAt: Date;
 }

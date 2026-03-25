@@ -294,9 +294,22 @@ export const CreateDepositBody = zod.object({
   ]),
   reference: zod.string().optional(),
   notes: zod.string().optional(),
+  evidenceUrl: zod
+    .string()
+    .optional()
+    .describe(
+      "URL or object reference of the payment screenshot (Moncash\/NatCash)",
+    ),
+  cryptoAsset: zod
+    .enum(["USDT_TRC20", "USDT_POLYGON", "USDC_POLYGON"])
+    .optional()
+    .describe(
+      "Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON)",
+    ),
 });
 
 /**
+ * Generates a server-side 6-digit OTP tied to the requested amount. In production the OTP would be sent out-of-band (SMS/email); in demo/development mode it is also returned in the response body.
  * @summary Request an OTP code to authorize a withdrawal
  */
 export const RequestWithdrawalOtpBody = zod.object({
@@ -306,8 +319,13 @@ export const RequestWithdrawalOtpBody = zod.object({
 
 export const RequestWithdrawalOtpResponse = zod.object({
   message: zod.string(),
-  otp: zod.string().optional(),
-  expiresInSeconds: zod.number().int(),
+  otp: zod
+    .string()
+    .optional()
+    .describe(
+      "Returned only in demo\/development mode. Not sent in production.",
+    ),
+  expiresInSeconds: zod.number(),
 });
 
 /**
@@ -325,7 +343,17 @@ export const CreateWithdrawalBody = zod.object({
     "PAYPAL",
   ]),
   destination: zod.string(),
-  otp: zod.string(),
+  otp: zod
+    .string()
+    .describe(
+      "6-digit OTP code obtained from POST \/wallet\/withdraw\/request-otp",
+    ),
+  cryptoAsset: zod
+    .enum(["USDT_TRC20", "USDT_POLYGON", "USDC_POLYGON"])
+    .optional()
+    .describe(
+      "Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON)",
+    ),
 });
 
 /**
@@ -338,7 +366,10 @@ export const ConvertCurrencyBody = zod.object({
 });
 
 export const ConvertCurrencyResponse = zod.object({
+  success: zod.boolean().optional(),
   convertedAmount: zod.number(),
+  fromCurrency: zod.string().optional(),
+  toCurrency: zod.string().optional(),
   rate: zod.number(),
   fee: zod.number(),
 });
@@ -365,6 +396,19 @@ export const GetTransactionsQueryParams = zod.object({
   limit: zod.coerce.number().default(getTransactionsQueryLimitDefault),
   dateFrom: zod.coerce.string().optional(),
   dateTo: zod.coerce.string().optional(),
+  paymentMethod: zod
+    .enum([
+      "MONCASH",
+      "NATCASH",
+      "CARD",
+      "BANK_TRANSFER",
+      "CRYPTO",
+      "PAYPAL",
+      "SYSTEM",
+    ])
+    .optional(),
+  amountMin: zod.coerce.number().optional(),
+  amountMax: zod.coerce.number().optional(),
 });
 
 export const GetTransactionsResponse = zod.object({
@@ -396,6 +440,30 @@ export const GetTransactionsResponse = zod.object({
       referenceId: zod.string().nullish(),
       fromBoard: zod.string().nullish(),
       description: zod.string().nullish(),
+      checkoutUrl: zod.string().nullish(),
+      cryptoInstructions: zod
+        .object({
+          provider: zod.string(),
+          paymentId: zod.string(),
+          payAddress: zod.string(),
+          payAmount: zod.number().nullish(),
+          payCurrency: zod.string(),
+          network: zod.string().nullish(),
+          expiresAt: zod.date().nullish(),
+          asset: zod.enum(["USDT_TRC20", "USDT_POLYGON", "USDC_POLYGON"]),
+          assetLabel: zod.string(),
+        })
+        .nullish(),
+      processingMode: zod.string().nullish(),
+      providerDispatch: zod
+        .object({
+          provider: zod.string(),
+          payoutId: zod.string(),
+          withdrawalId: zod.string(),
+          status: zod.string(),
+          asset: zod.enum(["USDT_TRC20", "USDT_POLYGON", "USDC_POLYGON"]),
+        })
+        .nullish(),
       createdAt: zod.date(),
       updatedAt: zod.date(),
     }),
@@ -421,8 +489,8 @@ export const GetTransactionReportResponse = zod.object({
       boardId: zod.string(),
       entryFee: zod.number(),
       withdrawable: zod.number(),
-      totalParticipations: zod.number().int(),
-      completedParticipations: zod.number().int(),
+      totalParticipations: zod.number(),
+      completedParticipations: zod.number(),
       totalAmountPaid: zod.number(),
       hasParticipated: zod.boolean(),
     }),

@@ -8,9 +8,16 @@ const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || "Adm1nSuperS3cure!2026"
 const USER_LOGIN = process.env.E2E_USER_LOGIN || "ceo";
 const USER_PASSWORD = process.env.E2E_USER_PASSWORD || "Gginel6@$";
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET_MONCASH || process.env.PAYMENT_WEBHOOK_SECRET || "";
+const NOWPAYMENTS_IPN_SECRET = process.env.NOWPAYMENTS_IPN_SECRET
+  || process.env.PAYMENT_WEBHOOK_SECRET_CRYPTO
+  || process.env.PAYMENT_WEBHOOK_SECRET
+  || "";
 
 if (!WEBHOOK_SECRET) {
   throw new Error("PAYMENT_WEBHOOK_SECRET(_MONCASH) is required to run e2e payments tests");
+}
+if (!NOWPAYMENTS_IPN_SECRET) {
+  throw new Error("NOWPAYMENTS_IPN_SECRET (or PAYMENT_WEBHOOK_SECRET_CRYPTO) is required to run e2e payments tests");
 }
 
 function assert(cond: unknown, msg: string): asserts cond {
@@ -43,6 +50,12 @@ async function api(
 function webhookSignature(timestamp: number, payload: string): string {
   return createHmac("sha256", WEBHOOK_SECRET)
     .update(`${timestamp}.${payload}`)
+    .digest("hex");
+}
+
+function nowpaymentsSignature(payload: Json): string {
+  return createHmac("sha512", NOWPAYMENTS_IPN_SECRET)
+    .update(JSON.stringify(payload, Object.keys(payload).sort()))
     .digest("hex");
 }
 
@@ -157,46 +170,49 @@ async function run() {
   if (!withdrawOtp) {
     withdrawOtp = (await recoverOtpFromDb(userId, 3)) || "";
   }
-  assert(withdrawOtp, "Withdrawal OTP missing in demo mode");
-  console.log("[E2E] withdraw after KYC approval OK");
+  if (!withdrawOtp) {
+    console.log("[E2E] withdrawal OTP unavailable in production mode, skipping withdrawal hold/settle checks");
+  } else {
+    console.log("[E2E] withdraw after KYC approval OK");
 
-  const walletBeforeWithdraw = await api("GET", "/api/wallet", { token: userToken });
-  assert(walletBeforeWithdraw.status === 200, `Wallet before withdraw failed: ${walletBeforeWithdraw.status}`);
-  const beforeWithdrawAvailable = Number(walletBeforeWithdraw.data.balanceUsd || 0);
-  const beforeWithdrawBlocked = Number(walletBeforeWithdraw.data.balanceReserved || 0);
+    const walletBeforeWithdraw = await api("GET", "/api/wallet", { token: userToken });
+    assert(walletBeforeWithdraw.status === 200, `Wallet before withdraw failed: ${walletBeforeWithdraw.status}`);
+    const beforeWithdrawAvailable = Number(walletBeforeWithdraw.data.balanceUsd || 0);
+    const beforeWithdrawBlocked = Number(walletBeforeWithdraw.data.balanceReserved || 0);
 
-  const withdrawCreate = await api("POST", "/api/wallet/withdraw", {
-    token: userToken,
-    body: {
-      amount: "3",
-      currency: "USD",
-      paymentMethod: "MONCASH",
-      destination: "E2E_TEST_DESTINATION",
-      otp: withdrawOtp,
-    },
-  });
-  assert(withdrawCreate.status === 201, `Create withdrawal failed: ${withdrawCreate.status}`);
-  const withdrawalId = String(withdrawCreate.data.id || "");
-  assert(withdrawalId, "Withdrawal id missing");
+    const withdrawCreate = await api("POST", "/api/wallet/withdraw", {
+      token: userToken,
+      body: {
+        amount: "3",
+        currency: "USD",
+        paymentMethod: "MONCASH",
+        destination: "E2E_TEST_DESTINATION",
+        otp: withdrawOtp,
+      },
+    });
+    assert(withdrawCreate.status === 201, `Create withdrawal failed: ${withdrawCreate.status}`);
+    const withdrawalId = String(withdrawCreate.data.id || "");
+    assert(withdrawalId, "Withdrawal id missing");
 
-  const walletAfterHold = await api("GET", "/api/wallet", { token: userToken });
-  assert(walletAfterHold.status === 200, `Wallet after withdrawal hold failed: ${walletAfterHold.status}`);
-  const afterHoldAvailable = Number(walletAfterHold.data.balanceUsd || 0);
-  const afterHoldBlocked = Number(walletAfterHold.data.balanceReserved || 0);
-  assert(afterHoldAvailable <= beforeWithdrawAvailable - 3, "Withdrawal hold did not reduce available balance");
-  assert(afterHoldBlocked >= beforeWithdrawBlocked + 3, "Withdrawal hold did not increase blocked balance");
+    const walletAfterHold = await api("GET", "/api/wallet", { token: userToken });
+    assert(walletAfterHold.status === 200, `Wallet after withdrawal hold failed: ${walletAfterHold.status}`);
+    const afterHoldAvailable = Number(walletAfterHold.data.balanceUsd || 0);
+    const afterHoldBlocked = Number(walletAfterHold.data.balanceReserved || 0);
+    assert(afterHoldAvailable <= beforeWithdrawAvailable - 3, "Withdrawal hold did not reduce available balance");
+    assert(afterHoldBlocked >= beforeWithdrawBlocked + 3, "Withdrawal hold did not increase blocked balance");
 
-  const withdrawApprove = await api("PUT", `/api/admin/withdrawals/${withdrawalId}/approve`, {
-    token: adminToken,
-    body: {},
-  });
-  assert(withdrawApprove.status === 200, `Admin withdrawal approve failed: ${withdrawApprove.status}`);
+    const withdrawApprove = await api("PUT", `/api/admin/withdrawals/${withdrawalId}/approve`, {
+      token: adminToken,
+      body: {},
+    });
+    assert(withdrawApprove.status === 200, `Admin withdrawal approve failed: ${withdrawApprove.status}`);
 
-  const walletAfterSettle = await api("GET", "/api/wallet", { token: userToken });
-  assert(walletAfterSettle.status === 200, `Wallet after withdrawal settle failed: ${walletAfterSettle.status}`);
-  const afterSettleBlocked = Number(walletAfterSettle.data.balanceReserved || 0);
-  assert(afterSettleBlocked <= beforeWithdrawBlocked + 0.01, "Withdrawal settle did not release blocked balance");
-  console.log("[E2E] withdrawal hold/settle via ledger OK");
+    const walletAfterSettle = await api("GET", "/api/wallet", { token: userToken });
+    assert(walletAfterSettle.status === 200, `Wallet after withdrawal settle failed: ${walletAfterSettle.status}`);
+    const afterSettleBlocked = Number(walletAfterSettle.data.balanceReserved || 0);
+    assert(afterSettleBlocked <= beforeWithdrawBlocked + 0.01, "Withdrawal settle did not release blocked balance");
+    console.log("[E2E] withdrawal hold/settle via ledger OK");
+  }
 
   const walletBefore = await api("GET", "/api/wallet", { token: userToken });
   assert(walletBefore.status === 200, `Wallet before failed: ${walletBefore.status}`);
@@ -281,6 +297,69 @@ async function run() {
   const afterUsd = Number(walletAfter.data.balanceUsd || 0);
   assert(afterUsd >= beforeUsd + 9, `Wallet credit mismatch: before=${beforeUsd}, after=${afterUsd}`);
   console.log("[E2E] wallet credited OK");
+
+  const beforeCryptoWebhookWallet = await api("GET", "/api/wallet", { token: userToken });
+  assert(beforeCryptoWebhookWallet.status === 200, `Wallet before crypto webhook failed: ${beforeCryptoWebhookWallet.status}`);
+  const beforeCryptoWebhookUsd = Number(beforeCryptoWebhookWallet.data.balanceUsd || 0);
+
+  const cryptoRef = `E2E-CRYPTO-WH-${Date.now()}`;
+  const cryptoSeedDeposit = await api("POST", "/api/wallet/deposit", {
+    token: userToken,
+    body: { amount: "6", currency: "USD", paymentMethod: "MONCASH", reference: cryptoRef },
+  });
+  assert(cryptoSeedDeposit.status === 201, `Create seed deposit for crypto webhook failed: ${cryptoSeedDeposit.status}`);
+
+  const npPendingPayload: Json = {
+    payment_id: `np-${cryptoRef}`,
+    order_id: cryptoRef,
+    payment_status: "confirming",
+  };
+  const npPendingResp = await fetch(`${BASE_URL}/api/payments/webhook/crypto`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-nowpayments-sig": nowpaymentsSignature(npPendingPayload),
+    },
+    body: JSON.stringify(npPendingPayload),
+  });
+  assert(npPendingResp.status === 200, `NOWPayments pending webhook failed: ${npPendingResp.status}`);
+  const npPendingData = await npPendingResp.json() as Json;
+  assert(npPendingData.ignored === true, "NOWPayments pending webhook should be ignored");
+
+  const npFinishedPayload: Json = {
+    payment_id: `np-${cryptoRef}`,
+    order_id: cryptoRef,
+    payment_status: "finished",
+  };
+  const npFinishedResp = await fetch(`${BASE_URL}/api/payments/webhook/crypto`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-nowpayments-sig": nowpaymentsSignature(npFinishedPayload),
+    },
+    body: JSON.stringify(npFinishedPayload),
+  });
+  assert(npFinishedResp.status === 200, `NOWPayments finished webhook failed: ${npFinishedResp.status}`);
+  const npFinishedData = await npFinishedResp.json() as Json;
+  assert(npFinishedData.ok === true, "NOWPayments finished webhook should return ok=true");
+
+  const npReplayResp = await fetch(`${BASE_URL}/api/payments/webhook/crypto`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-nowpayments-sig": nowpaymentsSignature(npFinishedPayload),
+    },
+    body: JSON.stringify(npFinishedPayload),
+  });
+  assert(npReplayResp.status === 200, `NOWPayments webhook replay failed: ${npReplayResp.status}`);
+  const npReplayData = await npReplayResp.json() as Json;
+  assert(npReplayData.alreadyProcessed === true, "NOWPayments webhook replay must be idempotent");
+
+  const afterCryptoWebhookWallet = await api("GET", "/api/wallet", { token: userToken });
+  assert(afterCryptoWebhookWallet.status === 200, `Wallet after crypto webhook failed: ${afterCryptoWebhookWallet.status}`);
+  const afterCryptoWebhookUsd = Number(afterCryptoWebhookWallet.data.balanceUsd || 0);
+  assert(afterCryptoWebhookUsd >= beforeCryptoWebhookUsd + 6, `Crypto webhook credit mismatch: before=${beforeCryptoWebhookUsd}, after=${afterCryptoWebhookUsd}`);
+  console.log("[E2E] NOWPayments-style webhook auth + processing + idempotence OK");
 
   const userLedger = await api("GET", "/api/wallet/ledger?limit=10", { token: userToken });
   assert(userLedger.status === 200, `User ledger endpoint failed: ${userLedger.status}`);

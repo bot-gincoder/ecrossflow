@@ -8,6 +8,11 @@ import {
   notificationsTable,
 } from "@workspace/db";
 import { creditAvailableFromTreasury, ensureLedgerInfra, releaseBlockedToAvailable, settleBlockedToTreasury } from "../lib/ledger.js";
+import {
+  canonicalizeNowpaymentsEvent,
+  getNowpaymentsIpnSecret,
+  verifyNowpaymentsSignature,
+} from "../services/crypto-provider.js";
 
 const router: IRouter = Router();
 let paymentsInfraReady = false;
@@ -346,6 +351,90 @@ async function processWebhookEvent(provider: string, canonical: CanonicalWebhook
     throw error;
   }
 }
+
+async function recordIgnoredEvent(args: {
+  provider: string;
+  eventId: string;
+  eventType: string;
+  referenceId: string;
+  payload: Record<string, unknown>;
+  reason: string;
+}) {
+  await db.insert(paymentEventsTable).values({
+    provider: args.provider,
+    eventId: args.eventId,
+    eventType: args.eventType,
+    referenceId: args.referenceId,
+    status: "IGNORED",
+    payload: args.payload,
+    error: args.reason,
+    processedAt: new Date(),
+  }).onConflictDoNothing({
+    target: [paymentEventsTable.provider, paymentEventsTable.eventId],
+  });
+}
+
+router.post("/payments/webhook/crypto", async (req, res) => {
+  await ensurePaymentsInfra();
+  await ensureLedgerInfra();
+
+  const payload = (req.body || {}) as Record<string, unknown>;
+  const signature = String(req.get("x-nowpayments-sig") || "");
+  const secret = getNowpaymentsIpnSecret();
+
+  if (!secret) {
+    res.status(503).json({ error: "Service Unavailable", message: "NOWPayments IPN secret is not configured" });
+    return;
+  }
+  if (!signature || !verifyNowpaymentsSignature(payload, signature)) {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid NOWPayments signature" });
+    return;
+  }
+
+  const canonicalNow = canonicalizeNowpaymentsEvent(payload);
+  if (!canonicalNow) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid NOWPayments payload" });
+    return;
+  }
+
+  if (!canonicalNow.status) {
+    await recordIgnoredEvent({
+      provider: "CRYPTO",
+      eventId: canonicalNow.eventId,
+      eventType: canonicalNow.eventType,
+      referenceId: canonicalNow.referenceId,
+      payload,
+      reason: `IGNORED_STATUS:${canonicalNow.rawStatus}`,
+    });
+    res.json({ ok: true, ignored: true, status: canonicalNow.rawStatus });
+    return;
+  }
+
+  try {
+    const outcome = await processWebhookEvent("CRYPTO", {
+      eventId: canonicalNow.eventId,
+      eventType: canonicalNow.eventType,
+      referenceId: canonicalNow.referenceId,
+      status: canonicalNow.status,
+      providerTxId: canonicalNow.providerTxId,
+      amountUsd: payload.price_amount as string | number | undefined,
+      currency: payload.price_currency ? String(payload.price_currency) : undefined,
+    }, payload);
+    if ("alreadyProcessed" in outcome) {
+      res.json({ ok: true, alreadyProcessed: true });
+      return;
+    }
+    res.json({ ok: true, ...outcome });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "WEBHOOK_PROCESSING_ERROR";
+    if (msg === "WALLET_NOT_FOUND") {
+      res.status(422).json({ error: "Unprocessable Entity", message: "Wallet not found for transaction user" });
+      return;
+    }
+    console.error("NOWPayments webhook processing failed:", error);
+    res.status(500).json({ error: "Internal Server Error", message: "Webhook processing failed" });
+  }
+});
 
 router.post("/payments/webhook/:provider", async (req, res) => {
   await ensurePaymentsInfra();

@@ -9,7 +9,7 @@ import {
   useGetWallet, useGetExchangeRates, useCreateDeposit, useCreateWithdrawal,
   useRequestWithdrawalOtp,
 } from '@workspace/api-client-react';
-import type { DepositRequestPaymentMethod, WithdrawalRequestPaymentMethod } from '@workspace/api-client-react';
+import type { CreateDepositMutationResult, DepositRequestPaymentMethod, WithdrawalRequestPaymentMethod } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
@@ -20,7 +20,7 @@ const DEPOSIT_METHODS = [
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
   { value: 'CARD', label: 'Carte Bancaire', flag: '💳', currencies: ['USD', 'EUR'] },
-  { value: 'CRYPTO', label: 'Crypto (USDT)', flag: '🪙', currencies: ['USDT', 'BTC', 'ETH'] },
+  { value: 'CRYPTO', label: 'Crypto', flag: '🪙', currencies: ['USDT', 'USDC'] },
 ];
 
 const WITHDRAW_METHODS = [
@@ -30,7 +30,7 @@ const WITHDRAW_METHODS = [
   { value: 'CRYPTO', label: 'Crypto (USDT)', flag: '🪙' },
 ];
 
-const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT'];
+const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC'];
 
 type Tab = 'deposit' | 'withdraw';
 
@@ -45,10 +45,24 @@ const BANK_COORDS = {
   iban: 'HT12BNC0000000123456789',
 };
 
-const CRYPTO_ADDRESS = {
-  USDT: 'TXf2Ld7CKYGXjnVQ8RFc7rFxQeP3Nkp1Q',
-  BTC: 'bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh',
-  ETH: '0x742d35Cc6634C0532925a3b8D4C9a3C8b7e2a1d',
+const CRYPTO_ASSETS = [
+  { value: 'USDT_TRC20', label: 'USDT (TRC20)', ticker: 'USDT', network: 'TRC20' },
+  { value: 'USDT_POLYGON', label: 'USDT (POLYGON)', ticker: 'USDT', network: 'POLYGON' },
+  { value: 'USDC_POLYGON', label: 'USDC (POLYGON)', ticker: 'USDC', network: 'POLYGON' },
+] as const;
+
+type CryptoAssetValue = typeof CRYPTO_ASSETS[number]['value'];
+
+type CryptoInstructions = {
+  provider: string;
+  paymentId: string;
+  payAddress: string;
+  payAmount?: number | null;
+  payCurrency: string;
+  network?: string | null;
+  expiresAt?: string | null;
+  asset: CryptoAssetValue;
+  assetLabel: string;
 };
 
 const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
@@ -101,7 +115,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function MethodInstructions({ method, currency }: { method: string; currency: string }) {
+function MethodInstructions({ method, currency, asset, instructions }: { method: string; currency: string; asset: CryptoAssetValue; instructions: CryptoInstructions | null }) {
   if (method === 'MONCASH') {
     return (
       <div className="bg-orange-500/10 border border-orange-500/20 rounded-2xl p-4 space-y-3">
@@ -197,22 +211,35 @@ function MethodInstructions({ method, currency }: { method: string; currency: st
   }
 
   if (method === 'CRYPTO') {
-    const address = CRYPTO_ADDRESS[currency as keyof typeof CRYPTO_ADDRESS] || CRYPTO_ADDRESS.USDT;
+    const selectedAsset = CRYPTO_ASSETS.find(a => a.value === asset) || CRYPTO_ASSETS[0];
     return (
       <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl p-4 space-y-3">
         <div className="flex items-center gap-2 text-yellow-400 font-semibold text-sm">
-          🪙 Dépôt Crypto
+          🪙 Dépôt Crypto Custodial
         </div>
-        <div className="bg-card/60 rounded-xl p-4 flex flex-col items-center gap-3">
-          <div className="text-center">
-            <p className="text-xs text-muted-foreground mb-1">Adresse {currency}</p>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs break-all text-foreground">{address}</span>
-              <CopyButton text={address} />
+        <div className="bg-card/60 rounded-xl p-4 space-y-2">
+          <p className="text-sm text-muted-foreground">Réseau sélectionné: <span className="text-foreground font-semibold">{selectedAsset.label}</span></p>
+          {!instructions ? (
+            <p className="text-xs text-muted-foreground">
+              Saisissez le montant puis cliquez sur <strong className="text-foreground">Déposer</strong> pour générer une adresse unique de paiement.
+            </p>
+          ) : (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">Adresse {instructions.payCurrency.toUpperCase()}</span>
+                <CopyButton text={instructions.payAddress} />
+              </div>
+              <p className="font-mono text-xs break-all text-foreground">{instructions.payAddress}</p>
+              {typeof instructions.payAmount === 'number' && (
+                <p className="text-xs text-muted-foreground">
+                  Montant à payer: <span className="text-foreground font-semibold">{instructions.payAmount} {instructions.payCurrency.toUpperCase()}</span>
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">ID paiement: <span className="text-foreground font-mono">{instructions.paymentId}</span></p>
             </div>
-          </div>
+          )}
         </div>
-        <p className="text-xs text-red-400 text-center">⚠️ Envoyez uniquement du {currency} à cette adresse. Les autres tokens seront perdus.</p>
+        <p className="text-xs text-red-400 text-center">⚠️ Envoyez uniquement du {selectedAsset.ticker} sur le réseau {selectedAsset.network}.</p>
       </div>
     );
   }
@@ -336,6 +363,8 @@ function WalletInner() {
   const [amount, setAmount] = React.useState('');
   const [currency, setCurrency] = React.useState('USD');
   const [paymentMethod, setPaymentMethod] = React.useState('MONCASH');
+  const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('USDT_TRC20');
+  const [cryptoInstructions, setCryptoInstructions] = React.useState<CryptoInstructions | null>(null);
   const [reference, setReference] = React.useState('');
   const [destination, setDestination] = React.useState('');
   const [showOTP, setShowOTP] = React.useState(false);
@@ -350,7 +379,21 @@ function WalletInner() {
 
   const { mutate: deposit, isPending: isDepositing, isSuccess: depositSuccess, reset: resetDeposit } = useCreateDeposit({
     mutation: {
-      onSuccess: () => { setAmount(''); setReference(''); setEvidenceUrl(''); setEvidenceFile(null); queryClient.invalidateQueries(); }
+      onSuccess: (data) => {
+        const payload = data as CreateDepositMutationResult & { cryptoInstructions?: CryptoInstructions | null };
+        if ((payload.paymentMethod || '').toUpperCase() === 'CRYPTO' && payload.cryptoInstructions) {
+          setCryptoInstructions(payload.cryptoInstructions);
+          setReference('');
+          setEvidenceUrl('');
+          setEvidenceFile(null);
+        } else {
+          setAmount('');
+          setReference('');
+          setEvidenceUrl('');
+          setEvidenceFile(null);
+        }
+        queryClient.invalidateQueries();
+      }
     }
   });
   const { mutate: withdraw, isPending: isWithdrawing, isSuccess: withdrawSuccess, reset: resetWithdraw } = useCreateWithdrawal({
@@ -391,14 +434,32 @@ function WalletInner() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (tab === 'deposit') {
-      deposit({ data: { amount: parseFloat(amount), currency, paymentMethod: paymentMethod as DepositRequestPaymentMethod, reference, evidenceUrl: evidenceUrl || undefined } });
+      deposit({
+        data: {
+          amount: parseFloat(amount),
+          currency,
+          paymentMethod: paymentMethod as DepositRequestPaymentMethod,
+          reference,
+          evidenceUrl: evidenceUrl || undefined,
+          ...(paymentMethod === 'CRYPTO' ? { cryptoAsset } : {}),
+        }
+      });
     } else if (tab === 'withdraw') {
       requestOtp();
     }
   };
 
   const confirmWithdraw = (otp: string) => {
-    withdraw({ data: { amount: parseFloat(amount), currency, paymentMethod: paymentMethod as WithdrawalRequestPaymentMethod, destination, otp } });
+    withdraw({
+      data: {
+        amount: parseFloat(amount),
+        currency,
+        paymentMethod: paymentMethod as WithdrawalRequestPaymentMethod,
+        destination,
+        otp,
+        ...(paymentMethod === 'CRYPTO' ? { cryptoAsset } : {}),
+      }
+    });
   };
 
   const usdEquivalent = amount && rates?.rates[currency]
@@ -406,6 +467,14 @@ function WalletInner() {
     : null;
 
   const currentDepositMethods = tab === 'withdraw' ? WITHDRAW_METHODS : DEPOSIT_METHODS;
+  const selectedCryptoAsset = CRYPTO_ASSETS.find(a => a.value === cryptoAsset) || CRYPTO_ASSETS[0];
+  const selectableCurrencies = paymentMethod === 'CRYPTO' ? [selectedCryptoAsset.ticker] : CURRENCIES;
+
+  React.useEffect(() => {
+    if (paymentMethod === 'CRYPTO' && currency !== selectedCryptoAsset.ticker) {
+      setCurrency(selectedCryptoAsset.ticker);
+    }
+  }, [paymentMethod, selectedCryptoAsset, currency]);
 
   return (
     <div className="space-y-8">
@@ -459,7 +528,7 @@ function WalletInner() {
             {(['deposit', 'withdraw'] as Tab[]).map(t => (
               <button
                 key={t}
-                onClick={() => { setTab(t); resetDeposit?.(); resetWithdraw?.(); setAmount(''); setPaymentMethod('MONCASH'); }}
+                onClick={() => { setTab(t); resetDeposit?.(); resetWithdraw?.(); setAmount(''); setPaymentMethod('MONCASH'); setCryptoInstructions(null); }}
                 className={`px-5 py-2 rounded-lg font-medium capitalize transition-all ${tab === t ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
               >
                 {t === 'deposit' ? '↓ Déposer' : '↑ Retirer'}
@@ -493,7 +562,7 @@ function WalletInner() {
                   onChange={e => setCurrency(e.target.value)}
                   className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
                 >
-                  {CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  {selectableCurrencies.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
             </div>
@@ -505,7 +574,7 @@ function WalletInner() {
                     <button
                       type="button"
                       key={m.value}
-                      onClick={() => setPaymentMethod(m.value)}
+                      onClick={() => { setPaymentMethod(m.value); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-border/80 text-muted-foreground'}`}
                     >
                       <span>{m.flag}</span> {m.label}
@@ -514,9 +583,27 @@ function WalletInner() {
                 </div>
               </div>
 
+            {paymentMethod === 'CRYPTO' && (
+              <div>
+                <label className="text-sm font-medium text-muted-foreground block mb-2">Réseau crypto</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                  {CRYPTO_ASSETS.map(asset => (
+                    <button
+                      key={asset.value}
+                      type="button"
+                      onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
+                      className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-border/80 text-muted-foreground'}`}
+                    >
+                      {asset.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Payment Method Instructions */}
             {tab === 'deposit' && paymentMethod && amount && (
-              <MethodInstructions method={paymentMethod} currency={currency} />
+              <MethodInstructions method={paymentMethod} currency={currency} asset={cryptoAsset} instructions={cryptoInstructions} />
             )}
 
             {tab === 'deposit' && (
@@ -579,6 +666,13 @@ function WalletInner() {
             {(depositSuccess || withdrawSuccess) && (
               <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-primary">
                 <Check className="w-5 h-5" /> Transaction soumise avec succès — En cours de traitement
+              </div>
+            )}
+
+            {tab === 'deposit' && paymentMethod === 'CRYPTO' && cryptoInstructions && (
+              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3 text-emerald-300 text-sm space-y-1">
+                <p className="font-semibold">Adresse générée avec succès.</p>
+                <p>Envoyez {cryptoInstructions.payCurrency.toUpperCase()} sur le réseau demandé pour finaliser le crédit du wallet.</p>
               </div>
             )}
 

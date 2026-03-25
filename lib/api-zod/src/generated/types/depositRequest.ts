@@ -5,6 +5,7 @@
  * Ecrossflow API specification
  * OpenAPI spec version: 0.1.0
  */
+import type { CryptoAsset } from "./cryptoAsset";
 import type { DepositRequestPaymentMethod } from "./depositRequestPaymentMethod";
 
 export interface DepositRequest {
@@ -13,4 +14,8 @@ export interface DepositRequest {
   paymentMethod: DepositRequestPaymentMethod;
   reference?: string;
   notes?: string;
+  /** URL or object reference of the payment screenshot (Moncash/NatCash) */
+  evidenceUrl?: string;
+  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  cryptoAsset?: CryptoAsset;
 }

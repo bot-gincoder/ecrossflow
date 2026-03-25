@@ -27,6 +27,8 @@ import {
   moncashRetrieveOrderPayment,
   moncashTransfer,
 } from "../services/moncash.js";
+import { getCryptoWithdrawMode } from "../services/crypto-provider.js";
+import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
 
 const router: IRouter = Router();
 
@@ -694,6 +696,72 @@ router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: 
   await ensureLedgerInfra();
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
+
+  const preRows = await db.select({
+    paymentMethod: transactionsTable.paymentMethod,
+    status: transactionsTable.status,
+  }).from(transactionsTable)
+    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
+    .limit(1);
+
+  if (!preRows.length) {
+    res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
+    return;
+  }
+
+  const isCryptoSemiAuto = (preRows[0].paymentMethod || "").toUpperCase() === "CRYPTO"
+    && getCryptoWithdrawMode() === "SEMI_AUTO";
+
+  if (isCryptoSemiAuto) {
+    try {
+      const outcome = await dispatchCryptoWithdrawal({
+        transactionId: id,
+        actorId: req.userId || null,
+        source: "ADMIN_APPROVAL",
+      });
+      res.json({
+        message: "Withdrawal approved",
+        mode: outcome.mode,
+        status: outcome.status,
+        provider: "NOWPAYMENTS",
+        payoutId: outcome.payoutId,
+        withdrawalId: outcome.withdrawalId,
+      });
+      return;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "";
+      if (msg === "NOT_FOUND") {
+        res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
+        return;
+      }
+      if (msg.startsWith("BAD_STATUS:")) {
+        res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${msg.split(":")[1]}` });
+        return;
+      }
+      if (msg === "MISSING_DESTINATION") {
+        res.status(400).json({ error: "Bad Request", message: "Withdrawal destination is missing" });
+        return;
+      }
+      if (msg === "INVALID_CRYPTO_ASSET") {
+        res.status(400).json({ error: "Bad Request", message: "Invalid crypto asset on withdrawal transaction" });
+        return;
+      }
+      if (msg === "CRYPTO_PAYOUT_NOT_CONFIGURED") {
+        res.status(503).json({ error: "Service Unavailable", message: "Crypto payout provider is not configured" });
+        return;
+      }
+      if (msg === "NOWPAYMENTS_AUTH_TOKEN_MISSING" || msg.startsWith("NOWPAYMENTS_AUTH_FAILED")) {
+        res.status(502).json({ error: "Bad Gateway", message: "Crypto provider auth failed" });
+        return;
+      }
+      if (msg.startsWith("NOWPAYMENTS_CREATE_PAYOUT_FAILED")) {
+        res.status(502).json({ error: "Bad Gateway", message: "Crypto payout dispatch failed" });
+        return;
+      }
+      throw error;
+    }
+  }
+
   let approvalOutcome: { mode: "manual" | "moncash-auto"; status: "COMPLETED" | "FAILED" } | null = null;
   try {
     approvalOutcome = await db.transaction(async (txDb) => {
