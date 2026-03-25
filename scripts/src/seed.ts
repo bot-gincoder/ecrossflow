@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { boardsTable, usersTable, walletsTable, boardInstancesTable } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const BOARDS = [
   { id: "F", rankOrder: 1, entryFee: "2.00", multiplier: 8, totalGain: "16.00", nextBoardDeduction: "8.00", withdrawable: "6.00", colorTheme: "gray" },
@@ -14,6 +14,32 @@ const BOARDS = [
 ];
 
 async function seed() {
+  // Ensure payment webhook audit infrastructure exists, even if schema sync is skipped.
+  await db.execute(sql`
+    DO $$ BEGIN
+      CREATE TYPE payment_event_status AS ENUM ('RECEIVED','PROCESSED','IGNORED','FAILED');
+    EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS payment_events (
+      id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+      provider varchar(30) NOT NULL,
+      event_id varchar(120) NOT NULL,
+      event_type varchar(50) NOT NULL,
+      reference_id varchar(100),
+      transaction_id uuid REFERENCES transactions(id),
+      status payment_event_status NOT NULL DEFAULT 'RECEIVED',
+      payload jsonb NOT NULL,
+      error text,
+      received_at timestamptz NOT NULL DEFAULT now(),
+      processed_at timestamptz
+    );
+  `);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_events_provider_event_id ON payment_events(provider, event_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_reference ON payment_events(reference_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_transaction ON payment_events(transaction_id);`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_payment_events_status_received ON payment_events(status, received_at);`);
+
   console.log("Seeding boards...");
   for (const board of BOARDS) {
     await db.insert(boardsTable).values(board).onConflictDoUpdate({

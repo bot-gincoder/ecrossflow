@@ -8,6 +8,7 @@ import transactionsRouter from "./transactions.js";
 import referralsRouter from "./referrals.js";
 import notificationsRouter from "./notifications.js";
 import adminRouter from "./admin.js";
+import paymentsRouter from "./payments.js";
 
 const router: IRouter = Router();
 
@@ -20,5 +21,6 @@ router.use(transactionsRouter);
 router.use(referralsRouter);
 router.use(notificationsRouter);
 router.use(adminRouter);
+router.use(paymentsRouter);
 
 export default router;

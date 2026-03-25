@@ -1,0 +1,106 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ecrossflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - ecrossflow_db_data:/var/lib/postgresql/data
+
+  db-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ecrossflow-db-init
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD}
+      ADMIN_SEED_EMAIL: ${ADMIN_SEED_EMAIL}
+      ADMIN_SEED_REFERRAL_CODE: ${ADMIN_SEED_REFERRAL_CODE}
+    command:
+      - sh
+      - -lc
+      - pnpm --filter @workspace/db run push && pnpm --filter @workspace/scripts run seed
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: ecrossflow-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: 8080
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL}
+      APP_URL: https://${DOMAIN}
+      PLATFORM_REF_CODE: ${PLATFORM_REF_CODE}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      SMTP_FROM: ${SMTP_FROM}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+      TWILIO_PHONE: ${TWILIO_PHONE}
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET}
+      PAYMENT_WEBHOOK_SECRET_MONCASH: ${PAYMENT_WEBHOOK_SECRET_MONCASH}
+      PAYMENT_WEBHOOK_SECRET_NATCASH: ${PAYMENT_WEBHOOK_SECRET_NATCASH}
+      PAYMENT_WEBHOOK_MAX_SKEW_SECONDS: ${PAYMENT_WEBHOOK_MAX_SKEW_SECONDS}
+      MIN_DEPOSIT_USD: ${MIN_DEPOSIT_USD}
+      MAX_DEPOSIT_USD: ${MAX_DEPOSIT_USD}
+      MIN_WITHDRAW_USD: ${MIN_WITHDRAW_USD}
+      MAX_WITHDRAW_USD: ${MAX_WITHDRAW_USD}
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        BASE_PATH: /
+        VITE_GOOGLE_CLIENT_ID: ${VITE_GOOGLE_CLIENT_ID}
+        VITE_STRIPE_PUBLIC_KEY: ${VITE_STRIPE_PUBLIC_KEY}
+    container_name: ecrossflow-web
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ecrossflow-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+      - api
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ecrossflow_caddy_data:/data
+      - ecrossflow_caddy_config:/config
+
+volumes:
+  ecrossflow_db_data:
+  ecrossflow_caddy_data:
+  ecrossflow_caddy_config:

@@ -1,4 +1,4 @@
-import { pgTable, uuid, integer, varchar, text, timestamp, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, integer, varchar, text, timestamp, pgEnum, foreignKey, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
@@ -29,7 +29,16 @@ export const usersTable = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   activatedAt: timestamp("activated_at", { withTimezone: true }),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  foreignKey({
+    columns: [t.referredBy],
+    foreignColumns: [t.id],
+    name: "users_referred_by_fkey",
+  }).onDelete("set null"),
+  index("idx_users_referred_by").on(t.referredBy),
+  index("idx_users_status").on(t.status),
+  index("idx_users_role").on(t.role),
+]);
 
 export const insertUserSchema = createInsertSchema(usersTable).omit({
   id: true,

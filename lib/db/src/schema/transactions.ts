@@ -1,4 +1,5 @@
-import { pgTable, uuid, varchar, numeric, text, timestamp, pgEnum, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, uuid, varchar, numeric, text, timestamp, pgEnum, jsonb, index, check, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -51,7 +52,16 @@ export const transactionsTable = pgTable("transactions", {
   adminNote: text("admin_note"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  check("chk_transactions_amount_positive", sql`${t.amount} > 0`),
+  check("chk_transactions_amount_usd_positive", sql`${t.amountUsd} > 0`),
+  check("chk_transactions_currency_not_blank", sql`char_length(${t.currency}) > 0`),
+  index("idx_transactions_user_created").on(t.userId, t.createdAt),
+  index("idx_transactions_user_status").on(t.userId, t.status),
+  index("idx_transactions_type_status").on(t.type, t.status),
+  index("idx_transactions_reference").on(t.referenceId),
+  uniqueIndex("uq_transactions_reference_id").on(t.referenceId),
+]);
 
 export const insertTransactionSchema = createInsertSchema(transactionsTable).omit({
   id: true,

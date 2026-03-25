@@ -25,6 +25,7 @@ router.get("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
     referralCode: user.referralCode,
     status: user.status,
     role: user.role,
+    kycStatus: user.kycStatus,
     preferredLanguage: user.preferredLanguage,
     preferredCurrency: user.preferredCurrency,
     preferredTheme: user.preferredTheme,
@@ -54,6 +55,7 @@ router.put("/users/me", requireAuth as never, async (req: AuthRequest, res) => {
     referralCode: updated.referralCode,
     status: updated.status,
     role: updated.role,
+    kycStatus: updated.kycStatus,
     preferredLanguage: updated.preferredLanguage,
     preferredCurrency: updated.preferredCurrency,
     preferredTheme: updated.preferredTheme,
@@ -86,6 +88,7 @@ router.put("/users/me/settings", requireAuth as never, async (req: AuthRequest, 
     referralCode: updated.referralCode,
     status: updated.status,
     role: updated.role,
+    kycStatus: updated.kycStatus,
     preferredLanguage: updated.preferredLanguage,
     preferredCurrency: updated.preferredCurrency,
     preferredTheme: updated.preferredTheme,
@@ -120,11 +123,30 @@ router.patch("/users/preferences", requireAuth as never, async (req: AuthRequest
     referralCode: updated.referralCode,
     status: updated.status,
     role: updated.role,
+    kycStatus: updated.kycStatus,
     preferredLanguage: updated.preferredLanguage,
     preferredCurrency: updated.preferredCurrency,
     preferredTheme: updated.preferredTheme,
     currentBoard: updated.currentBoard,
     createdAt: updated.createdAt,
+  });
+});
+
+router.post("/users/me/kyc/request", requireAuth as never, async (req: AuthRequest, res) => {
+  const [updated] = await db.update(usersTable)
+    .set({
+      kycStatus: "PENDING",
+      updatedAt: new Date(),
+    })
+    .where(eq(usersTable.id, req.userId!))
+    .returning({
+      id: usersTable.id,
+      kycStatus: usersTable.kycStatus,
+    });
+
+  res.json({
+    message: "KYC request submitted",
+    user: updated,
   });
 });
 

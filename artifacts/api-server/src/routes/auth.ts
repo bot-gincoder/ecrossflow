@@ -1,34 +1,45 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
 import { db } from "@workspace/db";
-import { usersTable, walletsTable, referralsTable, notificationsTable } from "@workspace/db";
-import { eq, or } from "drizzle-orm";
+import { usersTable, walletsTable, referralsTable, notificationsTable, otpCodesTable } from "@workspace/db";
+import { and, desc, eq, isNull, or } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
 import { sendEmail, buildOtpEmail } from "../services/email.js";
 import { OAuth2Client } from "google-auth-library";
+import { createHash } from "crypto";
 
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
   : null;
 
-interface OtpEntry {
-  otp: string;
-  userId: string;
-  expiresAt: number;
-  attempts: number;
-}
-
-const otpStore = new Map<string, OtpEntry>();
-
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-function cleanOtpStore() {
-  const now = Date.now();
-  for (const [key, entry] of otpStore.entries()) {
-    if (entry.expiresAt < now) otpStore.delete(key);
-  }
+function hashOtp(otp: string): string {
+  return createHash("sha256").update(otp).digest("hex");
+}
+
+async function saveOtpCode(userId: string, otp: string) {
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(otpCodesTable)
+      .set({ consumedAt: now })
+      .where(and(
+        eq(otpCodesTable.userId, userId),
+        eq(otpCodesTable.purpose, "EMAIL_VERIFICATION"),
+        isNull(otpCodesTable.consumedAt),
+      ));
+
+    await tx.insert(otpCodesTable).values({
+      userId,
+      purpose: "EMAIL_VERIFICATION",
+      codeHash: hashOtp(otp),
+      attempts: 0,
+      maxAttempts: 5,
+      expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
+    });
+  });
 }
 
 const router: IRouter = Router();
@@ -232,43 +243,47 @@ router.post("/auth/google", async (req, res) => {
 
   const placeholderHash = await bcrypt.hash(`GOOGLE_${googleId}_${Date.now()}`, 10);
 
-  const [newUser] = await db.insert(usersTable).values({
-    firstName,
-    lastName,
-    username: candidateUsername,
-    email: email.toLowerCase(),
-    passwordHash: placeholderHash,
-    googleId,
-    phone: phone || null,
-    avatarUrl: picture || null,
-    referralCode: uniqueCode,
-    referredBy: referrer[0].id,
-    preferredLanguage: "fr",
-    status: "ACTIVE",
-    role: "USER",
-    activatedAt: new Date(),
-  }).returning();
+  const newUser = await db.transaction(async (tx) => {
+    const [createdUser] = await tx.insert(usersTable).values({
+      firstName,
+      lastName,
+      username: candidateUsername,
+      email: email.toLowerCase(),
+      passwordHash: placeholderHash,
+      googleId,
+      phone: phone || null,
+      avatarUrl: picture || null,
+      referralCode: uniqueCode,
+      referredBy: referrer[0].id,
+      preferredLanguage: "fr",
+      status: "ACTIVE",
+      role: "USER",
+      activatedAt: new Date(),
+    }).returning();
 
-  await db.insert(walletsTable).values({
-    userId: newUser.id,
-    balanceUsd: "0",
-    balancePending: "0",
-    balanceReserved: "0",
-  });
+    await tx.insert(walletsTable).values({
+      userId: createdUser.id,
+      balanceUsd: "0",
+      balancePending: "0",
+      balanceReserved: "0",
+    });
 
-  await db.insert(referralsTable).values({
-    referrerId: referrer[0].id,
-    referredId: newUser.id,
-    bonusPaid: false,
-  });
+    await tx.insert(referralsTable).values({
+      referrerId: referrer[0].id,
+      referredId: createdUser.id,
+      bonusPaid: false,
+    });
 
-  await db.insert(notificationsTable).values({
-    userId: newUser.id,
-    type: "ACCOUNT_CREATED",
-    title: "Bienvenue sur Ecrossflow !",
-    message: `Votre compte a été créé via Google. Bienvenue dans la communauté !`,
-    category: "system",
-    read: false,
+    await tx.insert(notificationsTable).values({
+      userId: createdUser.id,
+      type: "ACCOUNT_CREATED",
+      title: "Bienvenue sur Ecrossflow !",
+      message: "Votre compte a été créé via Google. Bienvenue dans la communauté !",
+      category: "system",
+      read: false,
+    });
+
+    return createdUser;
   });
 
   const token = signToken(newUser.id, newUser.role, true);
@@ -360,45 +375,47 @@ router.post("/auth/register", async (req, res) => {
     else uniqueCode = generateReferralCode();
   }
 
-  const [newUser] = await db.insert(usersTable).values({
-    firstName,
-    lastName,
-    username: username.toLowerCase(),
-    email: email.toLowerCase(),
-    passwordHash,
-    phone: phone || null,
-    referralCode: uniqueCode,
-    referredBy: referrer[0].id,
-    preferredLanguage: preferredLanguage || "fr",
-    status: "PENDING",
-    role: "USER",
-  }).returning();
+  const newUser = await db.transaction(async (tx) => {
+    const [createdUser] = await tx.insert(usersTable).values({
+      firstName,
+      lastName,
+      username: username.toLowerCase(),
+      email: email.toLowerCase(),
+      passwordHash,
+      phone: phone || null,
+      referralCode: uniqueCode,
+      referredBy: referrer[0].id,
+      preferredLanguage: preferredLanguage || "fr",
+      status: "PENDING",
+      role: "USER",
+    }).returning();
 
-  await db.insert(walletsTable).values({
-    userId: newUser.id,
-    balanceUsd: "0",
-    balancePending: "0",
-    balanceReserved: "0",
-  });
+    await tx.insert(walletsTable).values({
+      userId: createdUser.id,
+      balanceUsd: "0",
+      balancePending: "0",
+      balanceReserved: "0",
+    });
 
-  await db.insert(referralsTable).values({
-    referrerId: referrer[0].id,
-    referredId: newUser.id,
-    bonusPaid: false,
-  });
+    await tx.insert(referralsTable).values({
+      referrerId: referrer[0].id,
+      referredId: createdUser.id,
+      bonusPaid: false,
+    });
 
-  await db.insert(notificationsTable).values({
-    userId: newUser.id,
-    type: "ACCOUNT_CREATED",
-    title: "Bienvenue sur Ecrossflow !",
-    message: `Votre compte a été créé avec succès. Complétez l'activation pour commencer.`,
-    category: "system",
-    read: false,
+    await tx.insert(notificationsTable).values({
+      userId: createdUser.id,
+      type: "ACCOUNT_CREATED",
+      title: "Bienvenue sur Ecrossflow !",
+      message: "Votre compte a été créé avec succès. Complétez l'activation pour commencer.",
+      category: "system",
+      read: false,
+    });
+
+    return createdUser;
   });
 
   const token = signToken(newUser.id, newUser.role);
-  const { passwordHash: _, ...userWithoutPassword } = newUser;
-
   res.status(201).json({
     token,
     user: {
@@ -504,7 +521,6 @@ router.post("/auth/logout", requireAuth as never, (req, res) => {
 
 router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
   const authReq = req as AuthRequest;
-  cleanOtpStore();
 
   if (!authReq.userId) {
     res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
@@ -524,14 +540,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
   const { email, phone } = users[0];
   const method = (req.body?.method as string) || "email";
   const otp = generateOtp();
-  const key = `otp:${email}`;
-
-  otpStore.set(key, {
-    otp,
-    userId: authReq.userId,
-    expiresAt: Date.now() + 10 * 60 * 1000,
-    attempts: 0,
-  });
+  await saveOtpCode(authReq.userId, otp);
 
   if (method === "sms" || method === "whatsapp") {
     const hasTwilio = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE;
@@ -576,7 +585,6 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
 
 router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
   const authReq = req as AuthRequest;
-  cleanOtpStore();
 
   if (!authReq.userId) {
     res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
@@ -595,14 +603,7 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
 
   const { email } = users[0];
   const otp = generateOtp();
-  const key = `otp:${email}`;
-
-  otpStore.set(key, {
-    otp,
-    userId: authReq.userId,
-    expiresAt: Date.now() + 10 * 60 * 1000,
-    attempts: 0,
-  });
+  await saveOtpCode(authReq.userId, otp);
 
   await sendEmail(buildOtpEmail(otp, email)).catch(() => {
     console.warn(`[OTP] Email delivery failed for ${email} — OTP code: ${otp}`);
@@ -635,43 +636,57 @@ router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const email = users[0].email;
-  const key = `otp:${email}`;
-  const entry = otpStore.get(key);
+  const now = new Date();
+  const entries = await db.select()
+    .from(otpCodesTable)
+    .where(and(
+      eq(otpCodesTable.userId, authReq.userId),
+      eq(otpCodesTable.purpose, "EMAIL_VERIFICATION"),
+      isNull(otpCodesTable.consumedAt),
+    ))
+    .orderBy(desc(otpCodesTable.createdAt))
+    .limit(1);
 
-  if (!entry) {
+  if (!entries.length) {
     res.status(400).json({ error: "Bad Request", message: "No OTP found. Please request a new one." });
     return;
   }
+  const entry = entries[0];
 
-  if (entry.userId !== authReq.userId) {
-    res.status(403).json({ error: "Forbidden", message: "OTP does not belong to this account." });
-    return;
-  }
-
-  if (Date.now() > entry.expiresAt) {
-    otpStore.delete(key);
+  if (now > entry.expiresAt) {
+    await db.update(otpCodesTable)
+      .set({ consumedAt: now })
+      .where(eq(otpCodesTable.id, entry.id));
     res.status(400).json({ error: "Bad Request", message: "OTP expired. Please request a new one." });
     return;
   }
 
-  entry.attempts++;
-  if (entry.attempts > 5) {
-    otpStore.delete(key);
+  const attemptsAfter = entry.attempts + 1;
+  if (attemptsAfter > entry.maxAttempts) {
+    await db.update(otpCodesTable)
+      .set({ attempts: attemptsAfter, consumedAt: now })
+      .where(eq(otpCodesTable.id, entry.id));
     res.status(429).json({ error: "Too Many Requests", message: "Too many attempts. Please request a new OTP." });
     return;
   }
 
-  if (entry.otp !== otp) {
+  if (entry.codeHash !== hashOtp(otp)) {
+    await db.update(otpCodesTable)
+      .set({ attempts: attemptsAfter })
+      .where(eq(otpCodesTable.id, entry.id));
     res.status(400).json({ error: "Bad Request", message: "Invalid OTP code." });
     return;
   }
 
-  otpStore.delete(key);
+  await db.transaction(async (tx) => {
+    await tx.update(otpCodesTable)
+      .set({ attempts: attemptsAfter, consumedAt: now })
+      .where(eq(otpCodesTable.id, entry.id));
 
-  await db.update(usersTable)
-    .set({ status: "ACTIVE", activatedAt: new Date() })
-    .where(eq(usersTable.id, authReq.userId));
+    await tx.update(usersTable)
+      .set({ status: "ACTIVE", activatedAt: now })
+      .where(eq(usersTable.id, authReq.userId!));
+  });
 
   res.json({ message: "Email verified successfully" });
 });

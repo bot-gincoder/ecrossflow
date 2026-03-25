@@ -210,6 +210,84 @@ router.put("/admin/users/:id/activate", requireAdmin as never, async (req: AuthR
   res.json({ message: "User activated" });
 });
 
+router.get("/admin/kyc/pending", requireAdmin as never, async (req: AuthRequest, res) => {
+  const users = await db.select({
+    id: usersTable.id,
+    username: usersTable.username,
+    email: usersTable.email,
+    firstName: usersTable.firstName,
+    lastName: usersTable.lastName,
+    createdAt: usersTable.createdAt,
+  })
+    .from(usersTable)
+    .where(eq(usersTable.kycStatus, "PENDING"))
+    .orderBy(desc(usersTable.updatedAt));
+
+  res.json({
+    users,
+    total: users.length,
+  });
+});
+
+router.put("/admin/users/:id/kyc/approve", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
+
+  const [user] = await db.update(usersTable)
+    .set({ kycStatus: "APPROVED", updatedAt: new Date() })
+    .where(eq(usersTable.id, id))
+    .returning({ id: usersTable.id });
+
+  if (!user) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
+    return;
+  }
+
+  await db.insert(notificationsTable).values({
+    userId: id,
+    type: "KYC_APPROVED",
+    title: "KYC approuvé",
+    message: "Votre vérification KYC est approuvée. Les retraits sont maintenant activés.",
+    category: "security",
+    actionUrl: "/wallet",
+    read: false,
+  });
+
+  res.json({ message: "KYC approved" });
+});
+
+router.put("/admin/users/:id/kyc/reject", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  const { reason } = req.body as { reason?: string };
+  if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
+  if (!reason) {
+    res.status(400).json({ error: "Bad Request", message: "Reason is required" });
+    return;
+  }
+
+  const [user] = await db.update(usersTable)
+    .set({ kycStatus: "REJECTED", updatedAt: new Date() })
+    .where(eq(usersTable.id, id))
+    .returning({ id: usersTable.id });
+
+  if (!user) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
+    return;
+  }
+
+  await db.insert(notificationsTable).values({
+    userId: id,
+    type: "KYC_REJECTED",
+    title: "KYC rejeté",
+    message: `Votre vérification KYC a été rejetée. Raison: ${String(reason)}`,
+    category: "security",
+    actionUrl: "/profile",
+    read: false,
+  });
+
+  res.json({ message: "KYC rejected" });
+});
+
 router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req: AuthRequest, res) => {
   const id = String(req.params.id);
   const { amount, note } = req.body;
@@ -217,40 +295,64 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req
     res.status(400).json({ error: "Bad Request", message: "Amount and note required" });
     return;
   }
-
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, id)).limit(1);
-  if (!wallets.length) {
-    res.status(404).json({ error: "Not Found", message: "Wallet not found" });
+  const delta = parseFloat(amount);
+  if (!Number.isFinite(delta) || delta === 0) {
+    res.status(400).json({ error: "Bad Request", message: "Amount must be a non-zero number" });
     return;
   }
 
-  const currentBalance = parseFloat(wallets[0].balanceUsd);
-  const newBalance = currentBalance + parseFloat(amount);
-  await db.update(walletsTable)
-    .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-    .where(eq(walletsTable.userId, id));
+  try {
+    await db.transaction(async (tx) => {
+      const wallets = await tx.select().from(walletsTable)
+        .where(eq(walletsTable.userId, id))
+        .for("update")
+        .limit(1);
+      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
 
-  await db.insert(transactionsTable).values({
-    userId: id,
-    type: "SYSTEM_FEE",
-    amount: Math.abs(parseFloat(amount)).toFixed(2),
-    currency: "USD",
-    amountUsd: Math.abs(parseFloat(amount)).toFixed(2),
-    status: "COMPLETED",
-    paymentMethod: "SYSTEM",
-    adminNote: note,
-    description: `Admin balance adjustment: ${note}`,
-  });
+      const currentBalance = parseFloat(wallets[0].balanceUsd);
+      const newBalance = currentBalance + delta;
+      if (newBalance < 0) throw new Error("NEGATIVE_BALANCE");
 
-  await db.insert(notificationsTable).values({
-    userId: id,
-    type: "BALANCE_ADJUSTED",
-    title: parseFloat(amount) > 0 ? "Crédit reçu" : "Débit effectué",
-    message: `Votre solde a été ${parseFloat(amount) > 0 ? "crédité' de $" + parseFloat(amount).toFixed(2) : "débité de $" + Math.abs(parseFloat(amount)).toFixed(2)}. Note: ${note}`,
-    category: "financial",
-    actionUrl: "/wallet",
-    read: false,
-  });
+      await tx.update(walletsTable)
+        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
+        .where(eq(walletsTable.userId, id));
+
+      await tx.insert(transactionsTable).values({
+        userId: id,
+        type: "SYSTEM_FEE",
+        amount: Math.abs(delta).toFixed(2),
+        currency: "USD",
+        amountUsd: Math.abs(delta).toFixed(2),
+        status: "COMPLETED",
+        paymentMethod: "SYSTEM",
+        adminNote: String(note),
+        description: `${delta > 0 ? "Admin credit" : "Admin debit"}: ${String(note)}`,
+      });
+
+      await tx.insert(notificationsTable).values({
+        userId: id,
+        type: "BALANCE_ADJUSTED",
+        title: delta > 0 ? "Crédit reçu" : "Débit effectué",
+        message: delta > 0
+          ? `Votre solde a été crédité de $${delta.toFixed(2)}. Note: ${String(note)}`
+          : `Votre solde a été débité de $${Math.abs(delta).toFixed(2)}. Note: ${String(note)}`,
+        category: "financial",
+        actionUrl: "/wallet",
+        read: false,
+      });
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg === "WALLET_NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Wallet not found" });
+      return;
+    }
+    if (msg === "NEGATIVE_BALANCE") {
+      res.status(400).json({ error: "Bad Request", message: "Adjustment would result in negative balance" });
+      return;
+    }
+    throw error;
+  }
 
   res.json({ message: "Balance adjusted successfully" });
 });
@@ -297,46 +399,58 @@ router.get("/admin/deposits/pending", requireAdmin as never, async (req: AuthReq
 router.put("/admin/deposits/:id/approve", requireAdmin as never, async (req: AuthRequest, res) => {
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
-  const txList = await db.select().from(transactionsTable)
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "DEPOSIT")))
-    .limit(1);
-  if (!txList.length) {
-    res.status(404).json({ error: "Not Found", message: "Deposit not found" });
-    return;
+  try {
+    await db.transaction(async (txDb) => {
+      const txRows = await txDb.select().from(transactionsTable)
+        .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "DEPOSIT")))
+        .for("update")
+        .limit(1);
+      if (!txRows.length) throw new Error("NOT_FOUND");
+      const row = txRows[0];
+
+      if (row.status !== "PENDING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      await txDb.update(transactionsTable)
+        .set({ status: "COMPLETED", updatedAt: new Date() })
+        .where(eq(transactionsTable.id, id));
+
+      const wallets = await txDb.select().from(walletsTable)
+        .where(eq(walletsTable.userId, row.userId))
+        .for("update")
+        .limit(1);
+      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
+
+      const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(row.amountUsd);
+      await txDb.update(walletsTable)
+        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
+        .where(eq(walletsTable.userId, row.userId));
+
+      await txDb.insert(notificationsTable).values({
+        userId: row.userId,
+        type: "DEPOSIT_APPROVED",
+        title: "Dépôt approuvé !",
+        message: `Votre dépôt de ${row.amount} ${row.currency} a été approuvé et crédité à votre wallet.`,
+        category: "financial",
+        actionUrl: "/wallet",
+        read: false,
+      });
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg === "NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Deposit not found" });
+      return;
+    }
+    if (msg === "WALLET_NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Wallet not found" });
+      return;
+    }
+    if (msg.startsWith("BAD_STATUS:")) {
+      res.status(409).json({ error: "Conflict", message: `Deposit is already in status ${msg.split(":")[1]}` });
+      return;
+    }
+    throw error;
   }
-  const tx = txList[0];
-
-  if (tx.status !== "PENDING") {
-    res.status(409).json({ error: "Conflict", message: `Deposit is already in status ${tx.status}` });
-    return;
-  }
-
-  const updated = await db.update(transactionsTable)
-    .set({ status: "COMPLETED", updatedAt: new Date() })
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.status, "PENDING")));
-
-  if (!updated.rowCount) {
-    res.status(409).json({ error: "Conflict", message: "Deposit was already processed" });
-    return;
-  }
-
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, tx.userId)).limit(1);
-  if (wallets.length) {
-    const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(tx.amountUsd);
-    await db.update(walletsTable)
-      .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-      .where(eq(walletsTable.userId, tx.userId));
-  }
-
-  await db.insert(notificationsTable).values({
-    userId: tx.userId,
-    type: "DEPOSIT_APPROVED",
-    title: "Dépôt approuvé !",
-    message: `Votre dépôt de ${tx.amount} ${tx.currency} a été approuvé et crédité à votre wallet.`,
-    category: "financial",
-    actionUrl: "/wallet",
-    read: false,
-  });
 
   res.json({ message: "Deposit approved" });
 });
@@ -349,38 +463,42 @@ router.put("/admin/deposits/:id/reject", requireAdmin as never, async (req: Auth
     res.status(400).json({ error: "Bad Request", message: "Reason is required" });
     return;
   }
-  const txList = await db.select().from(transactionsTable)
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "DEPOSIT")))
-    .limit(1);
-  if (!txList.length) {
-    res.status(404).json({ error: "Not Found", message: "Deposit not found" });
-    return;
+  try {
+    await db.transaction(async (txDb) => {
+      const txRows = await txDb.select().from(transactionsTable)
+        .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "DEPOSIT")))
+        .for("update")
+        .limit(1);
+      if (!txRows.length) throw new Error("NOT_FOUND");
+      const row = txRows[0];
+      if (row.status !== "PENDING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      await txDb.update(transactionsTable)
+        .set({ status: "CANCELLED", adminNote: reason, updatedAt: new Date() })
+        .where(eq(transactionsTable.id, id));
+
+      await txDb.insert(notificationsTable).values({
+        userId: row.userId,
+        type: "DEPOSIT_REJECTED",
+        title: "Dépôt rejeté",
+        message: `Votre dépôt de ${row.amount} ${row.currency} a été rejeté. Raison: ${reason}`,
+        category: "financial",
+        actionUrl: "/wallet",
+        read: false,
+      });
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg === "NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Deposit not found" });
+      return;
+    }
+    if (msg.startsWith("BAD_STATUS:")) {
+      res.status(409).json({ error: "Conflict", message: `Deposit is already in status ${msg.split(":")[1]}` });
+      return;
+    }
+    throw error;
   }
-  const tx = txList[0];
-
-  if (tx.status !== "PENDING") {
-    res.status(409).json({ error: "Conflict", message: `Deposit is already in status ${tx.status}` });
-    return;
-  }
-
-  const updated = await db.update(transactionsTable)
-    .set({ status: "CANCELLED", adminNote: reason, updatedAt: new Date() })
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.status, "PENDING")));
-
-  if (!updated.rowCount) {
-    res.status(409).json({ error: "Conflict", message: "Deposit was already processed" });
-    return;
-  }
-
-  await db.insert(notificationsTable).values({
-    userId: tx.userId,
-    type: "DEPOSIT_REJECTED",
-    title: "Dépôt rejeté",
-    message: `Votre dépôt de ${tx.amount} ${tx.currency} a été rejeté. Raison: ${reason}`,
-    category: "financial",
-    actionUrl: "/wallet",
-    read: false,
-  });
 
   res.json({ message: "Deposit rejected" });
 });
@@ -424,38 +542,42 @@ router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: Auth
 router.put("/admin/withdrawals/:id/approve", requireAdmin as never, async (req: AuthRequest, res) => {
   const id = String(req.params.id);
   if (!isValidId(id)) { res.status(400).json({ error: "Bad Request", message: "Invalid ID" }); return; }
-  const txList = await db.select().from(transactionsTable)
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
-    .limit(1);
-  if (!txList.length) {
-    res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
-    return;
+  try {
+    await db.transaction(async (txDb) => {
+      const txRows = await txDb.select().from(transactionsTable)
+        .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
+        .for("update")
+        .limit(1);
+      if (!txRows.length) throw new Error("NOT_FOUND");
+      const row = txRows[0];
+      if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      await txDb.update(transactionsTable)
+        .set({ status: "COMPLETED", updatedAt: new Date() })
+        .where(eq(transactionsTable.id, id));
+
+      await txDb.insert(notificationsTable).values({
+        userId: row.userId,
+        type: "WITHDRAWAL_APPROVED",
+        title: "Retrait approuvé !",
+        message: `Votre retrait de ${row.amount} ${row.currency} a été approuvé et sera traité sous 24h.`,
+        category: "financial",
+        actionUrl: "/wallet",
+        read: false,
+      });
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg === "NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
+      return;
+    }
+    if (msg.startsWith("BAD_STATUS:")) {
+      res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${msg.split(":")[1]}` });
+      return;
+    }
+    throw error;
   }
-  const tx = txList[0];
-
-  if (tx.status !== "PROCESSING") {
-    res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${tx.status}` });
-    return;
-  }
-
-  const updated = await db.update(transactionsTable)
-    .set({ status: "COMPLETED", updatedAt: new Date() })
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.status, "PROCESSING")));
-
-  if (!updated.rowCount) {
-    res.status(409).json({ error: "Conflict", message: "Withdrawal was already processed" });
-    return;
-  }
-
-  await db.insert(notificationsTable).values({
-    userId: tx.userId,
-    type: "WITHDRAWAL_APPROVED",
-    title: "Retrait approuvé !",
-    message: `Votre retrait de ${tx.amount} ${tx.currency} a été approuvé et sera traité sous 24h.`,
-    category: "financial",
-    actionUrl: "/wallet",
-    read: false,
-  });
 
   res.json({ message: "Withdrawal approved" });
 });
@@ -468,46 +590,57 @@ router.put("/admin/withdrawals/:id/reject", requireAdmin as never, async (req: A
     res.status(400).json({ error: "Bad Request", message: "Reason is required" });
     return;
   }
-  const txList = await db.select().from(transactionsTable)
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
-    .limit(1);
-  if (!txList.length) {
-    res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
-    return;
+  try {
+    await db.transaction(async (txDb) => {
+      const txRows = await txDb.select().from(transactionsTable)
+        .where(and(eq(transactionsTable.id, id), eq(transactionsTable.type, "WITHDRAWAL")))
+        .for("update")
+        .limit(1);
+      if (!txRows.length) throw new Error("NOT_FOUND");
+      const row = txRows[0];
+      if (row.status !== "PROCESSING") throw new Error(`BAD_STATUS:${row.status}`);
+
+      await txDb.update(transactionsTable)
+        .set({ status: "CANCELLED", adminNote: reason, updatedAt: new Date() })
+        .where(eq(transactionsTable.id, id));
+
+      const wallets = await txDb.select().from(walletsTable)
+        .where(eq(walletsTable.userId, row.userId))
+        .for("update")
+        .limit(1);
+      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
+
+      const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(row.amountUsd);
+      await txDb.update(walletsTable)
+        .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
+        .where(eq(walletsTable.userId, row.userId));
+
+      await txDb.insert(notificationsTable).values({
+        userId: row.userId,
+        type: "WITHDRAWAL_REJECTED",
+        title: "Retrait rejeté",
+        message: `Votre retrait de ${row.amount} ${row.currency} a été rejeté et remboursé. Raison: ${reason}`,
+        category: "financial",
+        actionUrl: "/wallet",
+        read: false,
+      });
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "";
+    if (msg === "NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Withdrawal not found" });
+      return;
+    }
+    if (msg === "WALLET_NOT_FOUND") {
+      res.status(404).json({ error: "Not Found", message: "Wallet not found" });
+      return;
+    }
+    if (msg.startsWith("BAD_STATUS:")) {
+      res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${msg.split(":")[1]}` });
+      return;
+    }
+    throw error;
   }
-  const tx = txList[0];
-
-  if (tx.status !== "PROCESSING") {
-    res.status(409).json({ error: "Conflict", message: `Withdrawal is already in status ${tx.status}` });
-    return;
-  }
-
-  const updated = await db.update(transactionsTable)
-    .set({ status: "CANCELLED", adminNote: reason, updatedAt: new Date() })
-    .where(and(eq(transactionsTable.id, id), eq(transactionsTable.status, "PROCESSING")));
-
-  if (!updated.rowCount) {
-    res.status(409).json({ error: "Conflict", message: "Withdrawal was already processed" });
-    return;
-  }
-
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, tx.userId)).limit(1);
-  if (wallets.length) {
-    const newBalance = parseFloat(wallets[0].balanceUsd) + parseFloat(tx.amountUsd);
-    await db.update(walletsTable)
-      .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-      .where(eq(walletsTable.userId, tx.userId));
-  }
-
-  await db.insert(notificationsTable).values({
-    userId: tx.userId,
-    type: "WITHDRAWAL_REJECTED",
-    title: "Retrait rejeté",
-    message: `Votre retrait de ${tx.amount} ${tx.currency} a été rejeté et remboursé. Raison: ${reason}`,
-    category: "financial",
-    actionUrl: "/wallet",
-    read: false,
-  });
 
   res.json({ message: "Withdrawal rejected and refunded" });
 });

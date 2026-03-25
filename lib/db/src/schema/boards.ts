@@ -1,4 +1,5 @@
-import { pgTable, varchar, integer, numeric, text, uuid, timestamp, pgEnum, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, varchar, integer, numeric, text, uuid, timestamp, pgEnum, uniqueIndex, index, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -16,7 +17,15 @@ export const boardsTable = pgTable("boards", {
   withdrawable: numeric("withdrawable", { precision: 10, scale: 2 }).notNull(),
   description: text("description"),
   colorTheme: varchar("color_theme", { length: 50 }),
-});
+}, (t) => [
+  check("chk_boards_rank_order_positive", sql`${t.rankOrder} > 0`),
+  check("chk_boards_entry_fee_positive", sql`${t.entryFee} > 0`),
+  check("chk_boards_total_gain_non_negative", sql`${t.totalGain} >= 0`),
+  check("chk_boards_next_deduction_non_negative", sql`${t.nextBoardDeduction} >= 0`),
+  check("chk_boards_withdrawable_non_negative", sql`${t.withdrawable} >= 0`),
+  check("chk_boards_distribution_le_total_gain", sql`${t.nextBoardDeduction} + ${t.withdrawable} <= ${t.totalGain}`),
+  uniqueIndex("uq_boards_rank_order").on(t.rankOrder),
+]);
 
 export const boardInstancesTable = pgTable("board_instances", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -28,7 +37,14 @@ export const boardInstancesTable = pgTable("board_instances", {
   totalCollected: numeric("total_collected", { precision: 10, scale: 2 }).default("0").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   completedAt: timestamp("completed_at", { withTimezone: true }),
-});
+}, (t) => [
+  uniqueIndex("uq_board_instance_sequence").on(t.boardId, t.instanceNumber),
+  check("chk_board_instance_number_positive", sql`${t.instanceNumber} > 0`),
+  check("chk_board_instance_slots_range", sql`${t.slotsFilled} >= 0 AND ${t.slotsFilled} <= 7`),
+  check("chk_board_instance_total_collected_non_negative", sql`${t.totalCollected} >= 0`),
+  index("idx_board_instances_board_status").on(t.boardId, t.status),
+  index("idx_board_instances_ranker").on(t.rankerId),
+]);
 
 export const boardParticipantsTable = pgTable("board_participants", {
   id: uuid("id").primaryKey().defaultRandom(),

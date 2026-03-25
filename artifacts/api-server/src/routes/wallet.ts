@@ -1,19 +1,37 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { walletsTable, transactionsTable, usersTable, notificationsTable } from "@workspace/db";
-import { eq, desc, and, gte, lte, sql } from "drizzle-orm";
+import { walletsTable, transactionsTable, notificationsTable, otpCodesTable, usersTable } from "@workspace/db";
+import { eq, desc, and, gte, lte, sql, isNull } from "drizzle-orm";
 import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
+import { createHash, randomUUID } from "crypto";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
 const router: IRouter = Router();
 
-// In-memory OTP store: userId -> { code, expiresAt, amountUsd }
-const withdrawalOtpStore = new Map<string, { code: string; expiresAt: number; amountUsd: number }>();
-
 function generateOtp(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
+
+function hashOtp(otp: string): string {
+  return createHash("sha256").update(otp).digest("hex");
+}
+
+function operationRef(prefix: "DEP" | "WDR"): string {
+  return `${prefix}-${randomUUID()}`;
+}
+
+function amountLimit(envKey: string, fallback: number): number {
+  const raw = process.env[envKey];
+  if (!raw) return fallback;
+  const n = parseFloat(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const MIN_DEPOSIT_USD = amountLimit("MIN_DEPOSIT_USD", 3);
+const MAX_DEPOSIT_USD = amountLimit("MAX_DEPOSIT_USD", 10000);
+const MIN_WITHDRAW_USD = amountLimit("MIN_WITHDRAW_USD", 3);
+const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
 
 const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT"]);
 const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
@@ -34,6 +52,18 @@ function parsePositiveAmount(value: unknown): number | null {
   const num = typeof value === "string" ? parseFloat(value) : typeof value === "number" ? value : NaN;
   if (!Number.isFinite(num) || num <= 0) return null;
   return num;
+}
+
+async function requireWithdrawKycApproved(userId: string): Promise<null | { status: 403; message: string }> {
+  const users = await db.select({ kycStatus: usersTable.kycStatus })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .limit(1);
+  if (!users.length) return { status: 403, message: "User not found" };
+  if (users[0].kycStatus !== "APPROVED") {
+    return { status: 403, message: "KYC approval is required before any withdrawal." };
+  }
+  return null;
 }
 
 router.get("/wallet", requireAuth as never, async (req: AuthRequest, res) => {
@@ -94,29 +124,70 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
+  if (amountUsd < MIN_DEPOSIT_USD || amountUsd > MAX_DEPOSIT_USD) {
+    res.status(400).json({
+      error: "Bad Request",
+      message: `Deposit amount must be between $${MIN_DEPOSIT_USD} and $${MAX_DEPOSIT_USD} (USD equivalent)`,
+    });
+    return;
+  }
 
-  const [tx] = await db.insert(transactionsTable).values({
-    userId: req.userId!,
-    type: "DEPOSIT",
-    amount: amountNum.toFixed(2),
-    currency: String(currency),
-    amountUsd: amountUsd.toFixed(2),
-    status: "PENDING",
-    paymentMethod: String(paymentMethod) as PaymentMethodValue,
-    referenceId: reference ? String(reference) : null,
-    description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
-    screenshotUrl: evidenceUrl ? String(evidenceUrl) : null,
-  }).returning();
+  const referenceId = reference ? String(reference).trim() : operationRef("DEP");
+  if (!referenceId || referenceId.length > 100) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid reference format" });
+    return;
+  }
 
-  await db.insert(notificationsTable).values({
-    userId: req.userId!,
-    type: "DEPOSIT_CREATED",
-    title: "Demande de dépôt reçue",
-    message: `Votre demande de dépôt de ${amountNum} ${currency} est en cours de traitement.`,
-    category: "financial",
-    actionUrl: "/history",
-    read: false,
-  });
+  let tx: typeof transactionsTable.$inferSelect;
+  try {
+    tx = await db.transaction(async (txDb) => {
+      if (reference) {
+        // Serialize same external reference to guarantee idempotent deposit creation.
+        await txDb.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${referenceId}))`);
+        const existing = await txDb.select({ id: transactionsTable.id })
+          .from(transactionsTable)
+          .where(eq(transactionsTable.referenceId, referenceId))
+          .limit(1);
+        if (existing.length) throw new Error("REFERENCE_CONFLICT");
+      }
+
+      const [created] = await txDb.insert(transactionsTable).values({
+        userId: req.userId!,
+        type: "DEPOSIT",
+        amount: amountNum.toFixed(2),
+        currency: String(currency),
+        amountUsd: amountUsd.toFixed(2),
+        status: "PENDING",
+        paymentMethod: String(paymentMethod) as PaymentMethodValue,
+        referenceId,
+        description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
+        screenshotUrl: evidenceUrl ? String(evidenceUrl) : null,
+        metadata: {
+          clientIp: req.ip || null,
+          userAgent: req.get("user-agent") || null,
+        },
+      }).returning();
+
+      await txDb.insert(notificationsTable).values({
+        userId: req.userId!,
+        type: "DEPOSIT_CREATED",
+        title: "Demande de dépôt reçue",
+        message: `Votre demande de dépôt de ${amountNum} ${currency} est en cours de traitement.`,
+        category: "financial",
+        actionUrl: "/history",
+        read: false,
+      });
+      return created;
+    });
+  } catch (error) {
+    const err = error as { code?: string; constraint?: string; message?: string } | undefined;
+    const msg = err?.message || "";
+    if (msg === "REFERENCE_CONFLICT" || err?.code === "23505" || err?.constraint === "uq_transactions_reference_id" || msg.toLowerCase().includes("uq_transactions_reference_id")) {
+      res.status(409).json({ error: "Conflict", message: "This payment reference already exists" });
+      return;
+    }
+    throw error;
+  }
 
   res.status(201).json({
     id: tx.id,
@@ -136,6 +207,11 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
 router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: AuthRequest, res) => {
   const { amount, currency } = req.body;
+  const kycGate = await requireWithdrawKycApproved(req.userId!);
+  if (kycGate) {
+    res.status(kycGate.status).json({ error: "Forbidden", message: kycGate.message, code: "KYC_REQUIRED_FOR_WITHDRAWAL" });
+    return;
+  }
 
   if (!amount || !currency) {
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
@@ -152,6 +228,13 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
   }
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
+  if (amountUsd < MIN_WITHDRAW_USD || amountUsd > MAX_WITHDRAW_USD) {
+    res.status(400).json({
+      error: "Bad Request",
+      message: `Withdrawal amount must be between $${MIN_WITHDRAW_USD} and $${MAX_WITHDRAW_USD} (USD equivalent)`,
+    });
+    return;
+  }
 
   const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
   if (!wallets.length || parseFloat(wallets[0].balanceUsd) < amountUsd) {
@@ -160,8 +243,26 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
   }
 
   const code = generateOtp();
-  // OTP valid for 10 minutes
-  withdrawalOtpStore.set(req.userId!, { code, expiresAt: Date.now() + 10 * 60 * 1000, amountUsd });
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(otpCodesTable)
+      .set({ consumedAt: now })
+      .where(and(
+        eq(otpCodesTable.userId, req.userId!),
+        eq(otpCodesTable.purpose, "WITHDRAWAL"),
+        isNull(otpCodesTable.consumedAt),
+      ));
+
+    await tx.insert(otpCodesTable).values({
+      userId: req.userId!,
+      purpose: "WITHDRAWAL",
+      codeHash: hashOtp(code),
+      amountUsd: amountUsd.toFixed(2),
+      attempts: 0,
+      maxAttempts: 5,
+      expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
+    });
+  });
 
   // In production send via SMS/email; in development/demo mode return in response for testing
   const isDemoMode = process.env.NODE_ENV !== "production";
@@ -174,102 +275,178 @@ router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: Au
 
 router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
   const { amount, currency, paymentMethod, destination, otp } = req.body;
+  const kycGate = await requireWithdrawKycApproved(req.userId!);
+  if (kycGate) {
+    res.status(kycGate.status).json({ error: "Forbidden", message: kycGate.message, code: "KYC_REQUIRED_FOR_WITHDRAWAL" });
+    return;
+  }
 
   if (!otp) {
     res.status(400).json({ error: "Bad Request", message: "OTP is required" });
     return;
   }
 
-  // Verify OTP
-  const stored = withdrawalOtpStore.get(req.userId!);
-  if (!stored) {
-    res.status(400).json({ error: "Bad Request", message: "No pending OTP. Request a new one." });
-    return;
-  }
-  if (Date.now() > stored.expiresAt) {
-    withdrawalOtpStore.delete(req.userId!);
-    res.status(400).json({ error: "Bad Request", message: "OTP expired. Request a new one." });
-    return;
-  }
-  if (stored.code !== String(otp)) {
-    res.status(400).json({ error: "Bad Request", message: "Invalid OTP" });
-    return;
-  }
-
   if (!amount || !currency || !paymentMethod || !destination) {
-    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
     return;
   }
 
   if (!SUPPORTED_CURRENCIES.has(String(currency))) {
-    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
     return;
   }
 
   if (!SUPPORTED_WITHDRAW_METHODS.has(String(paymentMethod))) {
-    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
     return;
   }
 
   const amountNum = parsePositiveAmount(amount);
   if (amountNum === null) {
-    withdrawalOtpStore.delete(req.userId!);
     res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
+    return;
+  }
+  const destinationValue = String(destination).trim();
+  if (!destinationValue || destinationValue.length > 200) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid destination format" });
     return;
   }
 
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
-
-  // Verify the withdrawal amount matches the OTP request amount (within 1 cent tolerance)
-  if (Math.abs(amountUsd - stored.amountUsd) > 0.01) {
-    withdrawalOtpStore.delete(req.userId!);
-    res.status(400).json({ error: "Bad Request", message: "Withdrawal amount does not match OTP request. Please request a new OTP." });
+  if (amountUsd < MIN_WITHDRAW_USD || amountUsd > MAX_WITHDRAW_USD) {
+    res.status(400).json({
+      error: "Bad Request",
+      message: `Withdrawal amount must be between $${MIN_WITHDRAW_USD} and $${MAX_WITHDRAW_USD} (USD equivalent)`,
+    });
     return;
   }
+  let createdTransaction: typeof transactionsTable.$inferSelect | null = null;
+  try {
+    createdTransaction = await db.transaction(async (tx) => {
+      const otpRows = await tx.select()
+        .from(otpCodesTable)
+        .where(and(
+          eq(otpCodesTable.userId, req.userId!),
+          eq(otpCodesTable.purpose, "WITHDRAWAL"),
+          isNull(otpCodesTable.consumedAt),
+        ))
+        .orderBy(desc(otpCodesTable.createdAt))
+        .for("update")
+        .limit(1);
 
-  withdrawalOtpStore.delete(req.userId!);
+      if (!otpRows.length) throw new Error("NO_OTP");
+      const otpRow = otpRows[0];
+      const now = new Date();
 
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
-  if (!wallets.length) {
-    res.status(400).json({ error: "Bad Request", message: "Wallet not found" });
-    return;
+      if (now > otpRow.expiresAt) {
+        await tx.update(otpCodesTable).set({ consumedAt: now }).where(eq(otpCodesTable.id, otpRow.id));
+        throw new Error("OTP_EXPIRED");
+      }
+
+      const attemptsAfter = otpRow.attempts + 1;
+      if (attemptsAfter > otpRow.maxAttempts) {
+        await tx.update(otpCodesTable)
+          .set({ attempts: attemptsAfter, consumedAt: now })
+          .where(eq(otpCodesTable.id, otpRow.id));
+        throw new Error("OTP_TOO_MANY_ATTEMPTS");
+      }
+
+      if (otpRow.codeHash !== hashOtp(String(otp))) {
+        await tx.update(otpCodesTable)
+          .set({ attempts: attemptsAfter })
+          .where(eq(otpCodesTable.id, otpRow.id));
+        throw new Error("OTP_INVALID");
+      }
+
+      if (otpRow.amountUsd === null || Math.abs(amountUsd - parseFloat(otpRow.amountUsd)) > 0.01) {
+        await tx.update(otpCodesTable)
+          .set({ attempts: attemptsAfter, consumedAt: now })
+          .where(eq(otpCodesTable.id, otpRow.id));
+        throw new Error("OTP_AMOUNT_MISMATCH");
+      }
+
+      const wallets = await tx.select()
+        .from(walletsTable)
+        .where(eq(walletsTable.userId, req.userId!))
+        .for("update")
+        .limit(1);
+      if (!wallets.length) throw new Error("WALLET_NOT_FOUND");
+
+      const currentBalance = parseFloat(wallets[0].balanceUsd);
+      if (currentBalance < amountUsd) throw new Error("INSUFFICIENT_FUNDS");
+
+      await tx.update(walletsTable)
+        .set({ balanceUsd: (currentBalance - amountUsd).toFixed(2), updatedAt: now })
+        .where(eq(walletsTable.userId, req.userId!));
+
+      const [insertedTx] = await tx.insert(transactionsTable).values({
+        userId: req.userId!,
+        type: "WITHDRAWAL",
+        amount: amountNum.toFixed(2),
+        currency: String(currency),
+        amountUsd: amountUsd.toFixed(2),
+        status: "PROCESSING",
+        paymentMethod: String(paymentMethod) as PaymentMethodValue,
+        referenceId: operationRef("WDR"),
+        description: `Withdrawal to ${destinationValue}`,
+        metadata: {
+          destination: destinationValue,
+          clientIp: req.ip || null,
+          userAgent: req.get("user-agent") || null,
+        },
+      }).returning();
+
+      await tx.insert(notificationsTable).values({
+        userId: req.userId!,
+        type: "WITHDRAWAL_CREATED",
+        title: "Retrait en cours",
+        message: `Votre retrait de ${amountNum} ${currency} est en cours de traitement.`,
+        category: "financial",
+        actionUrl: "/history",
+        read: false,
+      });
+
+      await tx.update(otpCodesTable)
+        .set({ attempts: attemptsAfter, consumedAt: now })
+        .where(eq(otpCodesTable.id, otpRow.id));
+
+      return insertedTx;
+    });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "WITHDRAW_FAILED";
+    if (reason === "NO_OTP") {
+      res.status(400).json({ error: "Bad Request", message: "No pending OTP. Request a new one." });
+      return;
+    }
+    if (reason === "OTP_EXPIRED") {
+      res.status(400).json({ error: "Bad Request", message: "OTP expired. Request a new one." });
+      return;
+    }
+    if (reason === "OTP_TOO_MANY_ATTEMPTS") {
+      res.status(429).json({ error: "Too Many Requests", message: "Too many OTP attempts. Request a new one." });
+      return;
+    }
+    if (reason === "OTP_INVALID") {
+      res.status(400).json({ error: "Bad Request", message: "Invalid OTP" });
+      return;
+    }
+    if (reason === "OTP_AMOUNT_MISMATCH") {
+      res.status(400).json({ error: "Bad Request", message: "Withdrawal amount does not match OTP request. Please request a new OTP." });
+      return;
+    }
+    if (reason === "WALLET_NOT_FOUND") {
+      res.status(400).json({ error: "Bad Request", message: "Wallet not found" });
+      return;
+    }
+    if (reason === "INSUFFICIENT_FUNDS") {
+      res.status(400).json({ error: "Bad Request", message: "Insufficient funds" });
+      return;
+    }
+    throw error;
   }
 
-  const currentBalance = parseFloat(wallets[0].balanceUsd);
-  if (currentBalance < amountUsd) {
-    res.status(400).json({ error: "Bad Request", message: "Insufficient funds" });
-    return;
-  }
-
-  const newBalance = currentBalance - amountUsd;
-  await db.update(walletsTable)
-    .set({ balanceUsd: newBalance.toFixed(2), updatedAt: new Date() })
-    .where(eq(walletsTable.userId, req.userId!));
-
-  const [tx] = await db.insert(transactionsTable).values({
-    userId: req.userId!,
-    type: "WITHDRAWAL",
-    amount: amountNum.toFixed(2),
-    currency: String(currency),
-    amountUsd: amountUsd.toFixed(2),
-    status: "PROCESSING",
-    paymentMethod: String(paymentMethod) as PaymentMethodValue,
-    description: `Withdrawal to ${String(destination)}`,
-  }).returning();
-
-  await db.insert(notificationsTable).values({
-    userId: req.userId!,
-    type: "WITHDRAWAL_CREATED",
-    title: "Retrait en cours",
-    message: `Votre retrait de ${amountNum} ${currency} est en cours de traitement.`,
-    category: "financial",
-    actionUrl: "/history",
-    read: false,
-  });
+  const tx = createdTransaction!;
 
   res.status(201).json({
     id: tx.id,

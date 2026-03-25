@@ -1,4 +1,5 @@
-import { pgTable, uuid, boolean, timestamp, numeric, text, pgEnum } from "drizzle-orm/pg-core";
+import { pgTable, uuid, boolean, timestamp, numeric, text, pgEnum, uniqueIndex, index, check } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { usersTable } from "./users";
@@ -12,7 +13,12 @@ export const referralsTable = pgTable("referrals", {
   referredId: uuid("referred_id").notNull().references(() => usersTable.id),
   bonusPaid: boolean("bonus_paid").default(false).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  uniqueIndex("uq_referrals_referred_once").on(t.referredId),
+  uniqueIndex("uq_referrals_referrer_referred").on(t.referrerId, t.referredId),
+  check("chk_referrals_not_self", sql`${t.referrerId} <> ${t.referredId}`),
+  index("idx_referrals_referrer_created").on(t.referrerId, t.createdAt),
+]);
 
 export const bonusesTable = pgTable("bonuses", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -22,7 +28,11 @@ export const bonusesTable = pgTable("bonuses", {
   status: bonusStatusEnum("status").default("PENDING").notNull(),
   triggerEvent: text("trigger_event"),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
-});
+}, (t) => [
+  check("chk_bonuses_amount_non_negative", sql`${t.amount} >= 0`),
+  index("idx_bonuses_user_created").on(t.userId, t.createdAt),
+  index("idx_bonuses_status").on(t.status),
+]);
 
 export const insertReferralSchema = createInsertSchema(referralsTable).omit({ id: true, createdAt: true });
 export const insertBonusSchema = createInsertSchema(bonusesTable).omit({ id: true, createdAt: true });
