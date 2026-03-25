@@ -62,6 +62,22 @@ async function seed() {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_expires_at ON otp_codes(expires_at);`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_consumed_at ON otp_codes(consumed_at);`);
   await db.execute(sql`
+    WITH ranked AS (
+      SELECT
+        id,
+        reference_id,
+        row_number() OVER (PARTITION BY reference_id ORDER BY created_at ASC, id ASC) AS rn
+      FROM transactions
+      WHERE reference_id IS NOT NULL
+    )
+    UPDATE transactions t
+    SET reference_id = left(t.reference_id, 85) || '-DUP-' || substring(t.id::text, 1, 8)
+    FROM ranked r
+    WHERE t.id = r.id
+      AND r.rn > 1;
+  `);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS uq_transactions_reference_id ON transactions(reference_id);`);
+  await db.execute(sql`
     DO $$ BEGIN
       CREATE TYPE ledger_account_type AS ENUM ('TREASURY','USER_AVAILABLE','USER_BLOCKED');
     EXCEPTION WHEN duplicate_object THEN NULL; END $$;
