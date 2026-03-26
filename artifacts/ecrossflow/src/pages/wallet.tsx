@@ -20,7 +20,7 @@ const DEPOSIT_METHODS = [
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
   { value: 'CARD', label: 'Carte Bancaire', flag: '💳', currencies: ['USD', 'EUR'] },
-  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙', currencies: ['MATIC'] },
+  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙', currencies: ['USD'] },
 ];
 
 const WITHDRAW_METHODS = [
@@ -111,6 +111,21 @@ function CopyButton({ text }: { text: string }) {
       {copied ? <Check className="w-4 h-4 text-primary" /> : <Copy className="w-4 h-4" />}
     </button>
   );
+}
+
+function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (!error || typeof error !== 'object') return fallback;
+  const maybe = error as {
+    message?: unknown;
+    data?: { message?: unknown; detail?: unknown; error?: unknown } | null;
+  };
+  if (maybe.data && typeof maybe.data === 'object') {
+    if (typeof maybe.data.message === 'string' && maybe.data.message.trim()) return maybe.data.message;
+    if (typeof maybe.data.detail === 'string' && maybe.data.detail.trim()) return maybe.data.detail;
+    if (typeof maybe.data.error === 'string' && maybe.data.error.trim()) return maybe.data.error;
+  }
+  if (typeof maybe.message === 'string' && maybe.message.trim()) return maybe.message;
+  return fallback;
 }
 
 function MethodInstructions({ method, currency, asset, instructions }: { method: string; currency: string; asset: CryptoAssetValue; instructions: CryptoInstructions | null }) {
@@ -363,6 +378,7 @@ function WalletInner() {
   const [paymentMethod, setPaymentMethod] = React.useState('MONCASH');
   const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('MATIC_POLYGON');
   const [cryptoInstructions, setCryptoInstructions] = React.useState<CryptoInstructions | null>(null);
+  const [depositError, setDepositError] = React.useState('');
   const [reference, setReference] = React.useState('');
   const [destination, setDestination] = React.useState('');
   const [showOTP, setShowOTP] = React.useState(false);
@@ -378,6 +394,7 @@ function WalletInner() {
   const { mutate: deposit, isPending: isDepositing, isSuccess: depositSuccess, reset: resetDeposit } = useCreateDeposit({
     mutation: {
       onSuccess: (data) => {
+        setDepositError('');
         const payload = data as CreateDepositMutationResult & { cryptoInstructions?: CryptoInstructions | null };
         if ((payload.paymentMethod || '').toUpperCase() === 'CRYPTO' && payload.cryptoInstructions) {
           setCryptoInstructions(payload.cryptoInstructions);
@@ -391,7 +408,10 @@ function WalletInner() {
           setEvidenceFile(null);
         }
         queryClient.invalidateQueries();
-      }
+      },
+      onError: (error) => {
+        setDepositError(getApiErrorMessage(error, 'Échec du dépôt. Vérifiez le montant et réessayez.'));
+      },
     }
   });
   const { mutate: withdraw, isPending: isWithdrawing, isSuccess: withdrawSuccess, reset: resetWithdraw } = useCreateWithdrawal({
@@ -432,6 +452,7 @@ function WalletInner() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (tab === 'deposit') {
+      setDepositError('');
       deposit({
         data: {
           amount: parseFloat(amount),
@@ -466,13 +487,16 @@ function WalletInner() {
 
   const currentDepositMethods = tab === 'withdraw' ? WITHDRAW_METHODS : DEPOSIT_METHODS;
   const selectedCryptoAsset = CRYPTO_ASSETS.find(a => a.value === cryptoAsset) || CRYPTO_ASSETS[0];
-  const selectableCurrencies = paymentMethod === 'CRYPTO' ? [selectedCryptoAsset.ticker] : CURRENCIES;
+  const selectableCurrencies = paymentMethod === 'CRYPTO'
+    ? (tab === 'deposit' ? ['USD'] : [selectedCryptoAsset.ticker])
+    : CURRENCIES;
 
   React.useEffect(() => {
-    if (paymentMethod === 'CRYPTO' && currency !== selectedCryptoAsset.ticker) {
-      setCurrency(selectedCryptoAsset.ticker);
+    if (paymentMethod === 'CRYPTO') {
+      const requiredCurrency = tab === 'deposit' ? 'USD' : selectedCryptoAsset.ticker;
+      if (currency !== requiredCurrency) setCurrency(requiredCurrency);
     }
-  }, [paymentMethod, selectedCryptoAsset, currency]);
+  }, [paymentMethod, selectedCryptoAsset, currency, tab]);
 
   return (
     <div className="space-y-8">
@@ -572,7 +596,7 @@ function WalletInner() {
                     <button
                       type="button"
                       key={m.value}
-                      onClick={() => { setPaymentMethod(m.value); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
+                      onClick={() => { setPaymentMethod(m.value); setDepositError(''); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
                       className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-border/80 text-muted-foreground'}`}
                     >
                       <span>{m.flag}</span> {m.label}
@@ -664,6 +688,12 @@ function WalletInner() {
             {(depositSuccess || withdrawSuccess) && (
               <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-primary">
                 <Check className="w-5 h-5" /> Transaction soumise avec succès — En cours de traitement
+              </div>
+            )}
+
+            {tab === 'deposit' && depositError && (
+              <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                {depositError}
               </div>
             )}
 

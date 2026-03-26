@@ -268,11 +268,10 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
       });
       return;
     }
-    const assetMeta = getCryptoAssetMeta(resolvedCryptoAsset);
-    if (String(currency).toUpperCase() !== assetMeta.ticker) {
+    if (String(currency).toUpperCase() !== "USD") {
       res.status(400).json({
         error: "Bad Request",
-        message: `Currency ${String(currency).toUpperCase()} does not match selected asset ${assetMeta.label}`,
+        message: "For crypto deposits, amount currency must be USD.",
       });
       return;
     }
