@@ -55,10 +55,11 @@ function amountLimit(envKey: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-const MIN_DEPOSIT_USD = amountLimit("MIN_DEPOSIT_USD", 3);
+const MIN_DEPOSIT_USD = amountLimit("MIN_DEPOSIT_USD", 2);
 const MAX_DEPOSIT_USD = amountLimit("MAX_DEPOSIT_USD", 10000);
 const MIN_WITHDRAW_USD = amountLimit("MIN_WITHDRAW_USD", 3);
 const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
+const CRYPTO_PROVIDER_MIN_DEPOSIT_USD = amountLimit("CRYPTO_PROVIDER_MIN_DEPOSIT_USD", 7);
 
 const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC"]);
 const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
@@ -419,19 +420,28 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
         .set({ metadata: nextMeta, updatedAt: new Date() })
         .where(eq(transactionsTable.id, tx.id));
     } catch (error) {
+      const providerErrorDetail = error instanceof Error ? error.message : "NOWPAYMENTS_CREATE_PAYMENT_FAILED";
       const nextMeta = {
         ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
         provider: "NOWPAYMENTS",
         cryptoAsset: resolvedCryptoAsset,
-        nowpaymentsError: error instanceof Error ? error.message : "NOWPAYMENTS_CREATE_PAYMENT_FAILED",
+        nowpaymentsError: providerErrorDetail,
       };
       await db.update(transactionsTable)
         .set({ status: "FAILED", metadata: nextMeta, updatedAt: new Date(), adminNote: "Crypto deposit initialization failed" })
         .where(eq(transactionsTable.id, tx.id));
+      if (providerErrorDetail.toLowerCase().includes("amountto is too small")) {
+        res.status(400).json({
+          error: "Bad Request",
+          code: "CRYPTO_PROVIDER_MIN_AMOUNT",
+          message: `Network minimum is currently about $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} for MATIC (Polygon). Please deposit at least $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} plus network fees.`,
+        });
+        return;
+      }
       res.status(502).json({
         error: "Bad Gateway",
         message: "Unable to initialize crypto deposit with custodial provider",
-        detail: error instanceof Error ? error.message : "NOWPAYMENTS_CREATE_PAYMENT_FAILED",
+        detail: providerErrorDetail,
       });
       return;
     }
