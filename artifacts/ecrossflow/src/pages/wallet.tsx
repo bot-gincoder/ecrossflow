@@ -67,6 +67,12 @@ type CryptoInstructions = {
   assetLabel: string;
 };
 
+type CircleAssetOption = {
+  asset: string;
+  network: string;
+  blockchain: string;
+};
+
 const stripePublicKey = import.meta.env.VITE_STRIPE_PUBLIC_KEY as string | undefined;
 const stripePromise = stripePublicKey ? loadStripe(stripePublicKey) : null;
 
@@ -391,10 +397,22 @@ function WalletInner() {
   const [otpError, setOtpError] = React.useState('');
   const [evidenceUrl, setEvidenceUrl] = React.useState('');
   const [evidenceFile, setEvidenceFile] = React.useState<File | null>(null);
+  const [circleEnabled, setCircleEnabled] = React.useState(false);
+  const [circleConfigured, setCircleConfigured] = React.useState(false);
+  const [circleAssets, setCircleAssets] = React.useState<CircleAssetOption[]>([]);
+  const [circleSelected, setCircleSelected] = React.useState<string>('');
+  const [circleAddress, setCircleAddress] = React.useState<string>('');
+  const [circleAddressLoading, setCircleAddressLoading] = React.useState(false);
+  const [circleError, setCircleError] = React.useState('');
   const queryClient = useQueryClient();
 
   const { data: wallet } = useGetWallet();
   const { data: rates } = useGetExchangeRates();
+
+  const authHeaders = React.useCallback(() => {
+    const token = localStorage.getItem('ecrossflow_token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }, []);
 
   const { mutate: deposit, isPending: isDepositing, isSuccess: depositSuccess, reset: resetDeposit } = useCreateDeposit({
     mutation: {
@@ -505,6 +523,14 @@ function WalletInner() {
     if (!validateForm()) return;
 
     if (tab === 'deposit') {
+      if (paymentMethod === 'CRYPTO' && circleEnabled) {
+        if (!circleAddress) {
+          setFormError('Adresse Circle indisponible pour le reseau selectionne.');
+          return;
+        }
+        setFormError('Adresse Circle prete. Envoyez les fonds puis attendez la confirmation on-chain.');
+        return;
+      }
       setDepositError('');
       deposit({
         data: {
@@ -555,6 +581,77 @@ function WalletInner() {
   React.useEffect(() => {
     setFormError('');
   }, [amount, currency, paymentMethod, tab, destination]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const shouldLoad = paymentMethod === 'CRYPTO' && tab === 'deposit';
+    if (!shouldLoad) return;
+    (async () => {
+      try {
+        setCircleError('');
+        const configRes = await fetch('/api/wallet/circle/config', {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        const config = await configRes.json();
+        if (cancelled) return;
+        setCircleEnabled(Boolean(config?.enabled));
+        setCircleConfigured(Boolean(config?.configured));
+
+        const assetsRes = await fetch('/api/wallet/circle/assets', {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        const assetsPayload = await assetsRes.json();
+        if (cancelled) return;
+        const assets = Array.isArray(assetsPayload?.assets) ? assetsPayload.assets as CircleAssetOption[] : [];
+        setCircleAssets(assets);
+        if (!circleSelected && assets.length) {
+          setCircleSelected(`${assets[0].asset}:${assets[0].network}`);
+        }
+      } catch {
+        if (!cancelled) setCircleError('Impossible de charger les reseaux Circle.');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [paymentMethod, tab, authHeaders, circleSelected]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const shouldLoadAddress = paymentMethod === 'CRYPTO' && tab === 'deposit' && circleEnabled && circleConfigured && Boolean(circleSelected);
+    if (!shouldLoadAddress) return;
+    const network = circleSelected.split(':')[1];
+    if (!network) return;
+    (async () => {
+      try {
+        setCircleAddressLoading(true);
+        setCircleError('');
+        const res = await fetch(`/api/wallet/circle/address?network=${encodeURIComponent(network)}`, {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        const payload = await res.json();
+        if (cancelled) return;
+        if (!res.ok) {
+          setCircleAddress('');
+          setCircleError(payload?.message || 'Impossible de generer une adresse Circle.');
+          return;
+        }
+        setCircleAddress(String(payload?.address || ''));
+      } catch {
+        if (!cancelled) setCircleError('Erreur lors de la recuperation de ladresse Circle.');
+      } finally {
+        if (!cancelled) setCircleAddressLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [circleSelected, circleEnabled, circleConfigured, paymentMethod, tab, authHeaders]);
 
   const quickAmounts = tab === 'deposit' ? ['2', '5', '10', '20'] : ['3', '10', '25', '50'];
   const ctaBusy = isDepositing || isWithdrawing || isRequestingOtp;
@@ -680,20 +777,57 @@ function WalletInner() {
               {paymentMethod === 'CRYPTO' && (
                 <div>
                   <label className="text-sm font-medium text-muted-foreground block mb-2">Reseau crypto</label>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {CRYPTO_ASSETS.map((asset) => (
-                      <button
-                        key={asset.value}
-                        type="button"
-                        onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
-                        className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
-                          cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
-                        }`}
-                      >
-                        {asset.label}
-                      </button>
-                    ))}
-                  </div>
+                  {circleEnabled ? (
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {circleAssets.map((opt) => {
+                          const key = `${opt.asset}:${opt.network}`;
+                          return (
+                            <button
+                              key={key}
+                              type="button"
+                              onClick={() => { setCircleSelected(key); setCryptoInstructions(null); }}
+                              className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
+                                circleSelected === key ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
+                              }`}
+                            >
+                              {opt.asset} ({opt.network})
+                            </button>
+                          );
+                        })}
+                      </div>
+                      {circleAddressLoading && (
+                        <p className="text-xs text-muted-foreground">Generation de ladresse Circle...</p>
+                      )}
+                      {circleAddress && (
+                        <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl p-3 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-xs text-emerald-300">Adresse de depot Circle</p>
+                            <CopyButton text={circleAddress} />
+                          </div>
+                          <p className="font-mono text-xs break-all text-foreground">{circleAddress}</p>
+                        </div>
+                      )}
+                      {circleError && (
+                        <p className="text-xs text-red-300">{circleError}</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {CRYPTO_ASSETS.map((asset) => (
+                        <button
+                          key={asset.value}
+                          type="button"
+                          onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
+                          className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
+                            cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
+                          }`}
+                        >
+                          {asset.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -803,6 +937,7 @@ function WalletInner() {
             </div>
             <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm text-muted-foreground space-y-2">
               <p className="flex items-center gap-2 text-foreground font-semibold"><Sparkles className="w-4 h-4 text-primary" /> Guide automatique</p>
+              <p>Provider crypto actif: {circleEnabled ? 'Circle' : 'Fallback custodial'}</p>
               <p>Minimum depot: ${APP_MIN_DEPOSIT_USD}. Minimum retrait: ${APP_MIN_WITHDRAW_USD}.</p>
               {paymentMethod === 'CRYPTO' && tab === 'deposit' && (
                 <p>Crypto: si le reseau refuse, commence a ${NETWORK_SOFT_MIN_USD} (minimum provider variable).</p>

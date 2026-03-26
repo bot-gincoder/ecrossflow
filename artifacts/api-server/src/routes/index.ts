@@ -9,6 +9,7 @@ import referralsRouter from "./referrals.js";
 import notificationsRouter from "./notifications.js";
 import adminRouter from "./admin.js";
 import paymentsRouter from "./payments.js";
+import circleRouter from "./circle.js";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(referralsRouter);
 router.use(notificationsRouter);
 router.use(adminRouter);
 router.use(paymentsRouter);
+router.use(circleRouter);
 
 export default router;

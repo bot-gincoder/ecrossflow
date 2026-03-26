@@ -6,6 +6,10 @@ import {
   paymentEventsTable,
   transactionsTable,
   notificationsTable,
+  depositsTable,
+  withdrawalsTable,
+  userWalletsTable,
+  walletAuditLogsTable,
 } from "@workspace/db";
 import { creditAvailableFromTreasury, ensureLedgerInfra, releaseBlockedToAvailable, settleBlockedToTreasury } from "../lib/ledger.js";
 import {
@@ -15,6 +19,7 @@ import {
   verifyOxaPayCallbackToken,
   verifyNowpaymentsSignature,
 } from "../services/crypto-provider.js";
+import { isCirclePrimary } from "../services/circle.js";
 
 const router: IRouter = Router();
 let paymentsInfraReady = false;
@@ -485,6 +490,165 @@ router.post("/payments/webhook/crypto", async (req, res) => {
     }
     console.error("NOWPayments webhook processing failed:", error);
     res.status(500).json({ error: "Internal Server Error", message: "Webhook processing failed" });
+  }
+});
+
+router.post("/payments/webhook/circle", async (req, res) => {
+  await ensurePaymentsInfra();
+  await ensureLedgerInfra();
+  if (!isCirclePrimary()) {
+    res.status(503).json({ error: "Service Unavailable", message: "Circle mode is disabled" });
+    return;
+  }
+
+  const payload = (req.body || {}) as Record<string, unknown>;
+  const notificationType = String(payload.notificationType || payload.type || "").toUpperCase();
+  const notification = (payload.notification && typeof payload.notification === "object")
+    ? payload.notification as Record<string, unknown>
+    : payload;
+  const eventId = String(payload.notificationId || payload.id || `${notificationType}:${notification.id || notification.transactionHash || Date.now()}`);
+  const statusRaw = String(notification.state || notification.status || "").toUpperCase();
+
+  const [inserted] = await db.insert(paymentEventsTable).values({
+    provider: "CIRCLE",
+    eventId,
+    eventType: notificationType || "CIRCLE_WEBHOOK",
+    referenceId: String(notification.id || notification.transactionHash || ""),
+    status: "RECEIVED",
+    payload,
+  }).onConflictDoNothing({
+    target: [paymentEventsTable.provider, paymentEventsTable.eventId],
+  }).returning({ id: paymentEventsTable.id });
+  if (!inserted) {
+    res.json({ ok: true, alreadyProcessed: true });
+    return;
+  }
+
+  try {
+    if (notificationType.includes("INBOUND")) {
+      const circleWalletId = String(notification.walletId || notification.destinationWalletId || "").trim();
+      const txHash = String(notification.transactionHash || notification.txHash || "").trim();
+      const amountRaw = String(notification.amount || (notification.amounts as unknown[] | undefined)?.[0] || "0");
+      const amount = Number.parseFloat(amountRaw);
+      const asset = String(notification.tokenSymbol || notification.asset || "USDC").toUpperCase();
+      const network = String(notification.blockchain || notification.network || "").toUpperCase();
+      if (circleWalletId && txHash && Number.isFinite(amount) && amount > 0 && statusRaw === "COMPLETE") {
+        await db.transaction(async (tx) => {
+          const wallets = await tx.select().from(userWalletsTable)
+            .where(eq(userWalletsTable.circleWalletId, circleWalletId))
+            .limit(1);
+          if (!wallets.length) return;
+          const userWallet = wallets[0];
+          const [dep] = await tx.insert(depositsTable).values({
+            userId: userWallet.userId,
+            walletId: userWallet.id,
+            txHash,
+            asset,
+            amount: String(amount),
+            amountUsd: String(amount),
+            network: network || userWallet.network,
+            status: "CONFIRMED",
+            confirmations: Number.parseInt(String(notification.confirmations || "1"), 10) || 1,
+            circleTransferId: String(notification.id || ""),
+            rawPayload: payload,
+          }).onConflictDoNothing({
+            target: [depositsTable.txHash],
+          }).returning({ id: depositsTable.id });
+          if (!dep) return;
+          await creditAvailableFromTreasury(tx, {
+            userId: userWallet.userId,
+            amountUsd: amount,
+            currency: "USD",
+            idempotencyKey: `circle:deposit:settle:${dep.id}`,
+            description: `Circle deposit ${txHash}`,
+            metadata: { provider: "CIRCLE", txHash, asset, network },
+          });
+          await tx.insert(walletAuditLogsTable).values({
+            userId: userWallet.userId,
+            type: "DEPOSIT_CONFIRMED",
+            referenceType: "DEPOSIT",
+            referenceId: dep.id,
+            details: `Circle inbound deposit confirmed (${asset} ${network})`,
+            payload,
+          });
+          await tx.insert(notificationsTable).values({
+            userId: userWallet.userId,
+            type: "DEPOSIT_SETTLED",
+            title: "Dépôt confirmé",
+            message: `Votre dépôt ${asset} a été confirmé.`,
+            category: "financial",
+            actionUrl: "/wallet",
+            read: false,
+          });
+        });
+      }
+    } else if (notificationType.includes("OUTBOUND")) {
+      const transferId = String(notification.id || notification.transferId || "").trim();
+      if (transferId) {
+        const rows = await db.select().from(withdrawalsTable)
+          .where(eq(withdrawalsTable.circleTransferId, transferId))
+          .limit(1);
+        if (rows.length) {
+          const w = rows[0];
+          if (statusRaw === "COMPLETE") {
+            await db.update(withdrawalsTable)
+              .set({ status: "COMPLETED", processedAt: new Date(), txHash: String(notification.transactionHash || ""), rawPayload: payload })
+              .where(eq(withdrawalsTable.id, w.id));
+            if (w.transactionId) {
+              await db.update(transactionsTable)
+                .set({ status: "COMPLETED", updatedAt: new Date() })
+                .where(eq(transactionsTable.id, w.transactionId));
+              await db.transaction(async (tx) => {
+                await settleBlockedToTreasury(tx, {
+                  userId: w.userId,
+                  transactionId: w.transactionId!,
+                  amountUsd: parseFloat(w.amountUsd),
+                  currency: "USD",
+                  idempotencyKey: `circle:withdraw:settle:${w.id}`,
+                  description: `Circle withdraw settled ${w.id}`,
+                  metadata: { provider: "CIRCLE", transferId },
+                });
+              });
+            }
+          } else if (statusRaw === "FAILED" || statusRaw === "CANCELLED" || statusRaw === "DENIED") {
+            await db.update(withdrawalsTable)
+              .set({ status: "FAILED", processedAt: new Date(), rawPayload: payload })
+              .where(eq(withdrawalsTable.id, w.id));
+            if (w.transactionId) {
+              await db.update(transactionsTable)
+                .set({ status: "FAILED", updatedAt: new Date(), adminNote: `Circle outbound ${statusRaw}` })
+                .where(eq(transactionsTable.id, w.transactionId));
+              await db.transaction(async (tx) => {
+                await releaseBlockedToAvailable(tx, {
+                  userId: w.userId,
+                  transactionId: w.transactionId!,
+                  amountUsd: parseFloat(w.amountUsd),
+                  currency: "USD",
+                  idempotencyKey: `circle:withdraw:release:${w.id}`,
+                  description: `Circle withdraw failed ${w.id}`,
+                  metadata: { provider: "CIRCLE", transferId, status: statusRaw },
+                });
+              });
+            }
+          }
+        }
+      }
+    }
+
+    await db.update(paymentEventsTable)
+      .set({ status: "PROCESSED", processedAt: new Date() })
+      .where(eq(paymentEventsTable.id, inserted.id));
+
+    res.json({ ok: true });
+  } catch (error) {
+    await db.update(paymentEventsTable)
+      .set({ status: "FAILED", error: error instanceof Error ? error.message : "CIRCLE_WEBHOOK_FAILED", processedAt: new Date() })
+      .where(eq(paymentEventsTable.id, inserted.id));
+    res.status(500).json({
+      error: "Internal Server Error",
+      message: "Circle webhook processing failed",
+      detail: error instanceof Error ? error.message : "CIRCLE_WEBHOOK_FAILED",
+    });
   }
 });
 
