@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Wallet, ArrowDownCircle, ArrowUpCircle, DollarSign,
   TrendingUp, Loader2, Copy, Check, Shield, CreditCard,
-  Building2, Smartphone, X, Upload, CheckCircle
+  Building2, Smartphone, X, Upload, CheckCircle, Sparkles
 } from 'lucide-react';
 import {
   useGetWallet, useGetExchangeRates, useCreateDeposit, useCreateWithdrawal,
@@ -31,6 +31,9 @@ const WITHDRAW_METHODS = [
 ];
 
 const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'MATIC'];
+const APP_MIN_DEPOSIT_USD = 2;
+const APP_MIN_WITHDRAW_USD = 3;
+const NETWORK_SOFT_MIN_USD = 7;
 
 type Tab = 'deposit' | 'withdraw';
 
@@ -379,6 +382,7 @@ function WalletInner() {
   const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('MATIC_POLYGON');
   const [cryptoInstructions, setCryptoInstructions] = React.useState<CryptoInstructions | null>(null);
   const [depositError, setDepositError] = React.useState('');
+  const [formError, setFormError] = React.useState('');
   const [reference, setReference] = React.useState('');
   const [destination, setDestination] = React.useState('');
   const [showOTP, setShowOTP] = React.useState(false);
@@ -395,6 +399,7 @@ function WalletInner() {
     mutation: {
       onSuccess: (data) => {
         setDepositError('');
+        setFormError('');
         const payload = data as CreateDepositMutationResult & { cryptoInstructions?: CryptoInstructions | null };
         if ((payload.paymentMethod || '').toUpperCase() === 'CRYPTO' && payload.cryptoInstructions) {
           setCryptoInstructions(payload.cryptoInstructions);
@@ -410,15 +415,23 @@ function WalletInner() {
         queryClient.invalidateQueries();
       },
       onError: (error) => {
-        setDepositError(getApiErrorMessage(error, 'Échec du dépôt. Vérifiez le montant et réessayez.'));
+        setDepositError(getApiErrorMessage(error, 'Echec du depot. Verifiez le montant et reessayez.'));
       },
     }
   });
+
   const { mutate: withdraw, isPending: isWithdrawing, isSuccess: withdrawSuccess, reset: resetWithdraw } = useCreateWithdrawal({
     mutation: {
-      onSuccess: () => { setAmount(''); setDestination(''); setShowOTP(false); setServerOtp(null); queryClient.invalidateQueries(); }
+      onSuccess: () => {
+        setAmount('');
+        setDestination('');
+        setShowOTP(false);
+        setServerOtp(null);
+        queryClient.invalidateQueries();
+      }
     }
   });
+
   const { mutate: requestOtpMutate, isPending: isRequestingOtp } = useRequestWithdrawalOtp({
     mutation: {
       onSuccess: (data) => {
@@ -427,15 +440,20 @@ function WalletInner() {
         setShowOTP(true);
       },
       onError: () => {
-        setOtpError('Erreur lors de la génération du code OTP. Vérifiez votre solde.');
+        setOtpError('Erreur lors de la generation du code OTP. Verifiez votre solde.');
       }
     }
   });
 
+  const amountNum = Number.parseFloat(amount);
+  const rateNum = Number((rates?.rates as Record<string, number> | undefined)?.[currency] ?? 1);
+  const amountUsd = Number.isFinite(amountNum) && amountNum > 0
+    ? amountNum / (Number.isFinite(rateNum) && rateNum > 0 ? rateNum : 1)
+    : 0;
+
   const requestOtp = () => {
-    if (!amount || !currency) return;
     setOtpError('');
-    requestOtpMutate({ data: { amount: parseFloat(amount), currency } });
+    requestOtpMutate({ data: { amount: amountNum, currency } });
   };
 
   const handleEvidenceFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -449,13 +467,47 @@ function WalletInner() {
     reader.readAsDataURL(file);
   };
 
+  const validateForm = (): boolean => {
+    if (!Number.isFinite(amountNum) || amountNum <= 0) {
+      setFormError('Veuillez saisir un montant valide.');
+      return false;
+    }
+
+    if (tab === 'deposit') {
+      if (amountUsd < APP_MIN_DEPOSIT_USD) {
+        setFormError(`Le montant minimum est ${APP_MIN_DEPOSIT_USD} USD.`);
+        return false;
+      }
+      setFormError('');
+      return true;
+    }
+
+    if (!destination.trim()) {
+      setFormError('La destination de retrait est obligatoire.');
+      return false;
+    }
+    if (amountUsd < APP_MIN_WITHDRAW_USD) {
+      setFormError(`Le retrait minimum est ${APP_MIN_WITHDRAW_USD} USD.`);
+      return false;
+    }
+    if (amountUsd > Number(wallet?.balanceUsd || 0)) {
+      setFormError('Solde disponible insuffisant.');
+      return false;
+    }
+
+    setFormError('');
+    return true;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!validateForm()) return;
+
     if (tab === 'deposit') {
       setDepositError('');
       deposit({
         data: {
-          amount: parseFloat(amount),
+          amount: amountNum,
           currency,
           paymentMethod: paymentMethod as DepositRequestPaymentMethod,
           reference,
@@ -463,15 +515,16 @@ function WalletInner() {
           ...(paymentMethod === 'CRYPTO' ? { cryptoAsset } : {}),
         }
       });
-    } else if (tab === 'withdraw') {
-      requestOtp();
+      return;
     }
+
+    requestOtp();
   };
 
   const confirmWithdraw = (otp: string) => {
     withdraw({
       data: {
-        amount: parseFloat(amount),
+        amount: amountNum,
         currency,
         paymentMethod: paymentMethod as WithdrawalRequestPaymentMethod,
         destination,
@@ -482,7 +535,7 @@ function WalletInner() {
   };
 
   const usdEquivalent = amount && rates?.rates[currency]
-    ? (parseFloat(amount) / (rates.rates[currency] as number)).toFixed(2)
+    ? (amountNum / (rates.rates[currency] as number)).toFixed(2)
     : null;
 
   const currentDepositMethods = tab === 'withdraw' ? WITHDRAW_METHODS : DEPOSIT_METHODS;
@@ -498,106 +551,124 @@ function WalletInner() {
     }
   }, [paymentMethod, selectedCryptoAsset, currency, tab]);
 
+  React.useEffect(() => {
+    setFormError('');
+  }, [amount, currency, paymentMethod, tab, destination]);
+
+  const quickAmounts = tab === 'deposit' ? ['2', '5', '10', '20'] : ['3', '10', '25', '50'];
+  const ctaBusy = isDepositing || isWithdrawing || isRequestingOtp;
+  const ctaDisabled = ctaBusy || !amount || (tab === 'withdraw' && !destination.trim());
+
   return (
-    <div className="space-y-8">
-        <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-          <h1 className="text-3xl font-display font-bold">Bourse Virtuelle</h1>
-          <p className="text-muted-foreground mt-1">Gérez vos dépôts et retraits</p>
-        </motion.div>
+    <div className="space-y-6">
+      <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
+        <h1 className="text-3xl font-display font-bold">Bourse Virtuelle</h1>
+        <p className="text-muted-foreground mt-1">Panneau de depot/retrait moderne, rapide et securise.</p>
+      </motion.div>
 
-        {/* Wallet Balance Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {[
-            { label: 'Solde Disponible', value: wallet?.balanceUsd || 0, color: 'from-primary/20 to-primary/5', textColor: 'text-primary', icon: Wallet },
-            { label: 'En Attente', value: wallet?.balancePending || 0, color: 'from-yellow-500/20 to-yellow-500/5', textColor: 'text-yellow-400', icon: TrendingUp },
-            { label: 'Réservé', value: wallet?.balanceReserved || 0, color: 'from-violet-500/20 to-violet-500/5', textColor: 'text-violet-400', icon: DollarSign },
-          ].map(({ label, value, color, textColor, icon: Icon }) => (
-            <motion.div
-              key={label}
-              initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
-              className={`bg-gradient-to-br ${color} rounded-2xl p-6 border border-border/50 backdrop-blur`}
-            >
-              <Icon className={`w-6 h-6 mb-3 ${textColor}`} />
-              <p className="text-sm text-muted-foreground">{label}</p>
-              <p className={`text-3xl font-display font-bold mt-1 ${textColor}`}>
-                ${Number(value).toFixed(2)}
-              </p>
-            </motion.div>
-          ))}
-        </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {[
+          { label: 'Disponible', value: wallet?.balanceUsd || 0, icon: Wallet, tone: 'text-primary border-primary/30 bg-primary/10' },
+          { label: 'En Attente', value: wallet?.balancePending || 0, icon: TrendingUp, tone: 'text-yellow-300 border-yellow-500/30 bg-yellow-500/10' },
+          { label: 'Bloque', value: wallet?.balanceReserved || 0, icon: DollarSign, tone: 'text-violet-300 border-violet-500/30 bg-violet-500/10' },
+        ].map(({ label, value, icon: Icon, tone }) => (
+          <div key={label} className={`rounded-2xl border p-4 ${tone}`}>
+            <div className="flex items-center justify-between">
+              <p className="text-xs uppercase tracking-wide opacity-80">{label}</p>
+              <Icon className="w-4 h-4" />
+            </div>
+            <p className="text-2xl font-display font-bold mt-2">${Number(value).toFixed(2)}</p>
+          </div>
+        ))}
+      </div>
 
-        {/* Rates Ticker */}
-        {rates && (
-          <div className="overflow-x-auto rounded-xl bg-card/40 border border-border/50 px-4 py-2">
-            <div className="flex items-center gap-6 min-w-max">
-              {Object.entries(rates.rates as Record<string, number>).filter(([k]) => !['USD', 'USDT'].includes(k)).map(([code, rate]) => (
-                <div key={code} className="flex items-center gap-2 text-sm">
-                  <span className="text-muted-foreground font-mono">{code}/USD</span>
-                  <span className="font-semibold">{rate.toFixed(code === 'HTG' ? 0 : code.startsWith('BT') ? 8 : 4)}</span>
-                </div>
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="rounded-3xl border border-border bg-card/50 p-4 sm:p-6 shadow-xl"
+      >
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_280px] gap-4 sm:gap-6">
+          <div className="space-y-5">
+            <div className="inline-flex w-full sm:w-auto rounded-2xl bg-muted/50 p-1">
+              {(['deposit', 'withdraw'] as Tab[]).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => {
+                    setTab(t);
+                    resetDeposit?.();
+                    resetWithdraw?.();
+                    setAmount('');
+                    setPaymentMethod('MONCASH');
+                    setCryptoInstructions(null);
+                    setDepositError('');
+                    setFormError('');
+                  }}
+                  className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-sm font-semibold transition ${
+                    tab === t ? 'bg-primary text-primary-foreground shadow' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {t === 'deposit' ? 'Depot' : 'Retrait'}
+                </button>
               ))}
             </div>
-          </div>
-        )}
 
-        {/* Transaction Form */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="bg-card/40 border border-border rounded-3xl p-6 shadow-xl"
-        >
-          {/* Tabs */}
-          <div className="flex gap-2 mb-6 bg-muted/40 p-1 rounded-xl w-fit">
-            {(['deposit', 'withdraw'] as Tab[]).map(t => (
-              <button
-                key={t}
-                onClick={() => { setTab(t); resetDeposit?.(); resetWithdraw?.(); setAmount(''); setPaymentMethod('MONCASH'); setCryptoInstructions(null); }}
-                className={`px-5 py-2 rounded-lg font-medium capitalize transition-all ${tab === t ? 'bg-card shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
-              >
-                {t === 'deposit' ? '↓ Déposer' : '↑ Retirer'}
-              </button>
-            ))}
-          </div>
-
-          <form onSubmit={handleSubmit} className="space-y-5">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Montant</label>
-                <div className="relative">
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
-                  <input
-                    type="number" step="0.01" min="0"
-                    value={amount}
-                    onChange={e => setAmount(e.target.value)}
-                    placeholder="0.00"
-                    required
-                    className="w-full bg-background border border-border rounded-xl pl-8 pr-4 py-3 font-mono focus:outline-none focus:ring-2 focus:ring-primary/50"
-                  />
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">Montant</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={amount}
+                      onChange={(e) => setAmount(e.target.value)}
+                      placeholder="0.00"
+                      required
+                      className="w-full rounded-xl border border-border bg-background pl-7 pr-3 py-3 font-mono focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                  </div>
+                  {usdEquivalent && currency !== 'USD' && (
+                    <p className="text-xs text-muted-foreground mt-1">~ ${usdEquivalent} USD</p>
+                  )}
                 </div>
-                {usdEquivalent && currency !== 'USD' && (
-                  <p className="text-xs text-muted-foreground mt-1">≈ ${usdEquivalent} USD</p>
-                )}
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">Devise</label>
+                  <select
+                    value={currency}
+                    onChange={(e) => setCurrency(e.target.value)}
+                    className="w-full rounded-xl border border-border bg-background px-3 py-3 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
+                    {selectableCurrencies.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
               </div>
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Devise</label>
-                <select
-                  value={currency}
-                  onChange={e => setCurrency(e.target.value)}
-                  className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                >
-                  {selectableCurrencies.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-            </div>
 
-            <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Méthode de paiement</label>
+              <div className="flex flex-wrap gap-2">
+                {quickAmounts.map((v) => (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => setAmount(v)}
+                    className="px-3 py-1.5 rounded-full text-xs border border-border bg-background/70 hover:border-primary/50 hover:text-primary transition"
+                  >
+                    ${v}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                <label className="text-sm font-medium text-muted-foreground block mb-2">Methode</label>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {currentDepositMethods.map(m => (
+                  {currentDepositMethods.map((m) => (
                     <button
                       type="button"
                       key={m.value}
                       onClick={() => { setPaymentMethod(m.value); setDepositError(''); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
-                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-border/80 text-muted-foreground'}`}
+                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
+                        paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'
+                      }`}
                     >
                       <span>{m.flag}</span> {m.label}
                     </button>
@@ -605,139 +676,156 @@ function WalletInner() {
                 </div>
               </div>
 
-            {paymentMethod === 'CRYPTO' && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Réseau crypto</label>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                  {CRYPTO_ASSETS.map(asset => (
-                    <button
-                      key={asset.value}
-                      type="button"
-                      onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
-                      className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:border-border/80 text-muted-foreground'}`}
-                    >
-                      {asset.label}
-                    </button>
-                  ))}
+              {paymentMethod === 'CRYPTO' && (
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">Reseau crypto</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {CRYPTO_ASSETS.map((asset) => (
+                      <button
+                        key={asset.value}
+                        type="button"
+                        onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
+                        className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
+                          cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
+                        }`}
+                      >
+                        {asset.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
-
-            {/* Payment Method Instructions */}
-            {tab === 'deposit' && paymentMethod && amount && (
-              <MethodInstructions method={paymentMethod} currency={currency} asset={cryptoAsset} instructions={cryptoInstructions} />
-            )}
-
-            {tab === 'deposit' && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Référence de paiement</label>
-                <input
-                  type="text"
-                  value={reference}
-                  onChange={e => setReference(e.target.value)}
-                  placeholder="Ex: TXN123456 (code de transaction)"
-                  className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-              </div>
-            )}
-
-            {tab === 'deposit' && (paymentMethod === 'MONCASH' || paymentMethod === 'NATCASH') && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">
-                  <Upload className="w-4 h-4 inline mr-1" /> Capture d'écran de confirmation (optionnel)
-                </label>
-                <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-xl p-4 cursor-pointer hover:border-primary/50 transition-colors bg-card/40">
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleEvidenceFileChange}
-                  />
-                  {evidenceFile ? (
-                    <div className="flex items-center gap-2 text-primary">
-                      <CheckCircle className="w-5 h-5" />
-                      <span className="text-sm font-medium">{evidenceFile.name}</span>
-                    </div>
-                  ) : (
-                    <>
-                      <Upload className="w-6 h-6 text-muted-foreground mb-1" />
-                      <p className="text-sm text-muted-foreground">Cliquez pour joindre votre screenshot MonCash/NatCash</p>
-                    </>
-                  )}
-                </label>
-              </div>
-            )}
-
-            {tab === 'withdraw' && (
-              <div>
-                <label className="text-sm font-medium text-muted-foreground block mb-2">Destination</label>
-                <input
-                  type="text" required
-                  value={destination}
-                  onChange={e => setDestination(e.target.value)}
-                  placeholder="Numéro MonCash / IBAN / adresse crypto"
-                  className="w-full bg-background border border-border rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50"
-                />
-                <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
-                  <Shield className="w-3 h-3" /> Une confirmation OTP sera requise avant le retrait.
-                </p>
-              </div>
-            )}
-
-            {/* Success feedback */}
-            {(depositSuccess || withdrawSuccess) && (
-              <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-primary">
-                <Check className="w-5 h-5" /> Transaction soumise avec succès — En cours de traitement
-              </div>
-            )}
-
-            {tab === 'deposit' && depositError && (
-              <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
-                {depositError}
-              </div>
-            )}
-
-            {tab === 'deposit' && paymentMethod === 'CRYPTO' && cryptoInstructions && (
-              <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3 text-emerald-300 text-sm space-y-1">
-                <p className="font-semibold">Adresse générée avec succès.</p>
-                <p>Envoyez {cryptoInstructions.payCurrency.toUpperCase()} sur le réseau demandé pour finaliser le crédit du wallet.</p>
-              </div>
-            )}
-
-            {otpError && (
-              <div className="text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
-                {otpError}
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isDepositing || isWithdrawing || isRequestingOtp}
-              className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold text-lg hover:shadow-[0_0_20px_rgba(0,255,170,0.3)] transition-all disabled:opacity-60"
-            >
-              {(isDepositing || isWithdrawing || isRequestingOtp) ? <Loader2 className="w-5 h-5 animate-spin" /> : (
-                tab === 'deposit' ? <><ArrowDownCircle className="w-5 h-5" /> Déposer</> :
-                <><ArrowUpCircle className="w-5 h-5" /> Retirer</>
               )}
-            </button>
-          </form>
-        </motion.div>
 
-        {/* OTP Modal (fixed position, DOM location doesn't matter) */}
-        <AnimatePresence>
-          {showOTP && (
-            <OTPModal
-              amount={parseFloat(amount)}
-              currency={currency}
-              paymentMethod={paymentMethod}
-              destination={destination}
-              serverOtp={serverOtp}
-              onConfirm={confirmWithdraw}
-              onCancel={() => { setShowOTP(false); setServerOtp(null); }}
-              isLoading={isWithdrawing}
-            />
-          )}
-        </AnimatePresence>
-      </div>
+              {tab === 'deposit' && paymentMethod && amount && (
+                <MethodInstructions method={paymentMethod} currency={currency} asset={cryptoAsset} instructions={cryptoInstructions} />
+              )}
+
+              {tab === 'deposit' && (
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">Reference (optionnel)</label>
+                  <input
+                    type="text"
+                    value={reference}
+                    onChange={(e) => setReference(e.target.value)}
+                    placeholder="Ex: TXN123456"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-3 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  />
+                </div>
+              )}
+
+              {tab === 'deposit' && (paymentMethod === 'MONCASH' || paymentMethod === 'NATCASH') && (
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">
+                    <Upload className="w-4 h-4 inline mr-1" /> Capture d'ecran (optionnel)
+                  </label>
+                  <label className="flex flex-col items-center justify-center border-2 border-dashed border-border rounded-xl p-4 cursor-pointer hover:border-primary/50 transition-colors bg-card/40">
+                    <input type="file" accept="image/*" className="hidden" onChange={handleEvidenceFileChange} />
+                    {evidenceFile ? (
+                      <div className="flex items-center gap-2 text-primary">
+                        <CheckCircle className="w-5 h-5" />
+                        <span className="text-sm font-medium">{evidenceFile.name}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <Upload className="w-6 h-6 text-muted-foreground mb-1" />
+                        <p className="text-sm text-muted-foreground">Ajouter une preuve de paiement</p>
+                      </>
+                    )}
+                  </label>
+                </div>
+              )}
+
+              {tab === 'withdraw' && (
+                <div>
+                  <label className="text-sm font-medium text-muted-foreground block mb-2">Destination</label>
+                  <input
+                    type="text"
+                    value={destination}
+                    onChange={(e) => setDestination(e.target.value)}
+                    placeholder="Numero / IBAN / adresse crypto"
+                    className="w-full rounded-xl border border-border bg-background px-3 py-3 focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  />
+                  <p className="text-xs text-muted-foreground mt-1.5 flex items-center gap-1">
+                    <Shield className="w-3 h-3" /> Confirmation OTP obligatoire avant envoi.
+                  </p>
+                </div>
+              )}
+
+              {(depositSuccess || withdrawSuccess) && (
+                <div className="flex items-center gap-2 bg-primary/10 border border-primary/20 rounded-xl px-4 py-3 text-primary text-sm">
+                  <Check className="w-4 h-4" /> Transaction soumise avec succes.
+                </div>
+              )}
+
+              {tab === 'deposit' && depositError && (
+                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                  {depositError}
+                </div>
+              )}
+
+              {formError && (
+                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                  {formError}
+                </div>
+              )}
+
+              {tab === 'deposit' && paymentMethod === 'CRYPTO' && cryptoInstructions && (
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-xl px-4 py-3 text-emerald-300 text-sm space-y-1">
+                  <p className="font-semibold">Adresse generee avec succes.</p>
+                  <p>Envoyez {cryptoInstructions.payCurrency.toUpperCase()} sur le reseau demande pour finaliser le credit du wallet.</p>
+                </div>
+              )}
+
+              {otpError && (
+                <div className="text-sm text-red-300 bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3">
+                  {otpError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={ctaDisabled}
+                className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground rounded-xl py-3.5 font-semibold text-base sm:text-lg hover:shadow-[0_0_20px_rgba(0,255,170,0.3)] transition disabled:opacity-60"
+              >
+                {ctaBusy ? <Loader2 className="w-5 h-5 animate-spin" /> : (
+                  tab === 'deposit' ? <><ArrowDownCircle className="w-5 h-5" /> Deposer</> : <><ArrowUpCircle className="w-5 h-5" /> Retirer</>
+                )}
+              </button>
+            </form>
+          </div>
+
+          <aside className="space-y-3">
+            <div className="rounded-2xl border border-border bg-background/70 p-4">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground">Resume</p>
+              <p className="text-lg font-semibold mt-2">{tab === 'deposit' ? 'Depot' : 'Retrait'} {amount || '0'} {currency}</p>
+              <p className="text-xs text-muted-foreground mt-1">Equivalent USD: ${amountUsd.toFixed(2)}</p>
+            </div>
+            <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm text-muted-foreground space-y-2">
+              <p className="flex items-center gap-2 text-foreground font-semibold"><Sparkles className="w-4 h-4 text-primary" /> Guide automatique</p>
+              <p>Minimum depot: ${APP_MIN_DEPOSIT_USD}. Minimum retrait: ${APP_MIN_WITHDRAW_USD}.</p>
+              {paymentMethod === 'CRYPTO' && tab === 'deposit' && (
+                <p>Crypto: si le reseau refuse, commence a ${NETWORK_SOFT_MIN_USD} (minimum provider variable).</p>
+              )}
+              <p>Les retraits demandent OTP + KYC approuve.</p>
+            </div>
+          </aside>
+        </div>
+      </motion.div>
+
+      <AnimatePresence>
+        {showOTP && (
+          <OTPModal
+            amount={amountNum || 0}
+            currency={currency}
+            paymentMethod={paymentMethod}
+            destination={destination}
+            serverOtp={serverOtp}
+            onConfirm={confirmWithdraw}
+            onCancel={() => { setShowOTP(false); setServerOtp(null); }}
+            isLoading={isWithdrawing}
+          />
+        )}
+      </AnimatePresence>
+    </div>
   );
 }

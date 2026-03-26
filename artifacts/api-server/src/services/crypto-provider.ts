@@ -346,52 +346,58 @@ export async function createCustodialCryptoDeposit(args: {
   description: string;
   asset: CryptoAssetKey;
 }): Promise<CreatedCryptoDeposit> {
+  const providerMode = String(process.env.CRYPTO_DEPOSIT_PROVIDER || "AUTO").trim().toUpperCase();
   const provider = getCryptoDepositProvider();
   if (!isCryptoDepositConfigured()) throw new Error(`${provider}_DEPOSIT_NOT_CONFIGURED`);
   const assetMeta = getCryptoAssetMeta(args.asset);
   const webhookUrl = buildWebhookUrl();
 
   if (provider === "OXAPAY") {
-    const body: JsonObject = {
-      amount: round2(args.amountUsd),
-      currency: "USD",
-      pay_currency: assetMeta.oxaCurrency,
-      network: assetMeta.oxaNetwork,
-      lifetime: envNumber("OXAPAY_PAYMENT_LIFETIME_MINUTES", 60),
-      fee_paid_by_payer: envBool("OXAPAY_FEE_PAID_BY_PAYER", true) ? 1 : 0,
-      under_paid_coverage: envNumber("OXAPAY_UNDERPAID_COVERAGE_PERCENT", 0),
-      order_id: args.referenceId,
-      description: args.description,
-    };
-    if (webhookUrl) body.callback_url = webhookUrl;
+    try {
+      const body: JsonObject = {
+        amount: round2(args.amountUsd),
+        currency: "USD",
+        pay_currency: assetMeta.oxaCurrency,
+        network: assetMeta.oxaNetwork,
+        lifetime: envNumber("OXAPAY_PAYMENT_LIFETIME_MINUTES", 60),
+        fee_paid_by_payer: envBool("OXAPAY_FEE_PAID_BY_PAYER", true) ? 1 : 0,
+        under_paid_coverage: envNumber("OXAPAY_UNDERPAID_COVERAGE_PERCENT", 0),
+        order_id: args.referenceId,
+        description: args.description,
+      };
+      if (webhookUrl) body.callback_url = webhookUrl;
 
-    const response = await oxaPayRequest({
-      method: "POST",
-      path: "/v1/payment/white-label",
-      body,
-    });
-    if (response.status !== 200) {
-      throw new Error(`OXAPAY_CREATE_PAYMENT_FAILED:${response.status}:${String(response.data.message || (response.data.error as JsonObject | undefined)?.message || "UNKNOWN")}`);
+      const response = await oxaPayRequest({
+        method: "POST",
+        path: "/v1/payment/white-label",
+        body,
+      });
+      if (response.status !== 200) {
+        throw new Error(`OXAPAY_CREATE_PAYMENT_FAILED:${response.status}:${String(response.data.message || (response.data.error as JsonObject | undefined)?.message || "UNKNOWN")}`);
+      }
+      const data = (response.data.data && typeof response.data.data === "object")
+        ? response.data.data as JsonObject
+        : response.data;
+      const paymentId = String(data.track_id || "").trim();
+      const payAddress = String(data.address || "").trim();
+      if (!paymentId || !payAddress) {
+        throw new Error("OXAPAY_CREATE_PAYMENT_INVALID_RESPONSE");
+      }
+      return {
+        provider: "OXAPAY",
+        paymentId,
+        paymentStatus: String(data.status || "waiting").toLowerCase(),
+        payAddress,
+        payAmount: parseAmount(data.pay_amount as string | number | null | undefined),
+        payCurrency: String(data.pay_currency || assetMeta.oxaCurrency),
+        network: data.network ? String(data.network) : assetMeta.oxaNetwork,
+        expiresAt: data.expired_at ? new Date(Number(data.expired_at) * 1000).toISOString() : null,
+        raw: response.data,
+      };
+    } catch (error) {
+      const canFallbackNow = providerMode === "AUTO" && Boolean(getApiKey());
+      if (!canFallbackNow) throw error;
     }
-    const data = (response.data.data && typeof response.data.data === "object")
-      ? response.data.data as JsonObject
-      : response.data;
-    const paymentId = String(data.track_id || "").trim();
-    const payAddress = String(data.address || "").trim();
-    if (!paymentId || !payAddress) {
-      throw new Error("OXAPAY_CREATE_PAYMENT_INVALID_RESPONSE");
-    }
-    return {
-      provider: "OXAPAY",
-      paymentId,
-      paymentStatus: String(data.status || "waiting").toLowerCase(),
-      payAddress,
-      payAmount: parseAmount(data.pay_amount as string | number | null | undefined),
-      payCurrency: String(data.pay_currency || assetMeta.oxaCurrency),
-      network: data.network ? String(data.network) : assetMeta.oxaNetwork,
-      expiresAt: data.expired_at ? new Date(Number(data.expired_at) * 1000).toISOString() : null,
-      raw: response.data,
-    };
   }
 
   const body: JsonObject = {
