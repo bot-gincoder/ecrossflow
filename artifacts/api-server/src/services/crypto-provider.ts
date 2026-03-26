@@ -2,38 +2,24 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 type JsonObject = Record<string, unknown>;
 
-export type CryptoAssetKey = "USDT_TRC20" | "USDT_POLYGON" | "USDC_POLYGON";
+export type CryptoAssetKey = "BNB_BSC";
 export type CryptoWithdrawMode = "AUTO" | "SEMI_AUTO";
 
 type CryptoAssetDef = {
   key: CryptoAssetKey;
-  label: string;
-  ticker: "USDT" | "USDC";
-  network: "TRC20" | "POLYGON";
-  nowCurrency: "usdttrc20" | "usdtmatic" | "usdcmatic";
+  label: "BNB (BSC)";
+  ticker: "BNB";
+  network: "BSC";
+  nowCurrency: "bnbbsc";
 };
 
 export const CRYPTO_ASSET_DEFS: Record<CryptoAssetKey, CryptoAssetDef> = {
-  USDT_TRC20: {
-    key: "USDT_TRC20",
-    label: "USDT (TRC20)",
-    ticker: "USDT",
-    network: "TRC20",
-    nowCurrency: "usdttrc20",
-  },
-  USDT_POLYGON: {
-    key: "USDT_POLYGON",
-    label: "USDT (POLYGON)",
-    ticker: "USDT",
-    network: "POLYGON",
-    nowCurrency: "usdtmatic",
-  },
-  USDC_POLYGON: {
-    key: "USDC_POLYGON",
-    label: "USDC (POLYGON)",
-    ticker: "USDC",
-    network: "POLYGON",
-    nowCurrency: "usdcmatic",
+  BNB_BSC: {
+    key: "BNB_BSC",
+    label: "BNB (BSC)",
+    ticker: "BNB",
+    network: "BSC",
+    nowCurrency: "bnbbsc",
   },
 };
 
@@ -101,32 +87,26 @@ function normalizeToken(raw: string): string {
 function parseAssetAlias(raw: string): CryptoAssetKey | null {
   const token = normalizeToken(raw);
   const aliases: Record<string, CryptoAssetKey> = {
-    USDT_TRC20: "USDT_TRC20",
-    USDTTRC20: "USDT_TRC20",
-    TRC20_USDT: "USDT_TRC20",
-    USDT_TRON: "USDT_TRC20",
-    USDT_POLYGON: "USDT_POLYGON",
-    USDTMATIC: "USDT_POLYGON",
-    USDT_MATIC: "USDT_POLYGON",
-    POLYGON_USDT: "USDT_POLYGON",
-    USDC_POLYGON: "USDC_POLYGON",
-    USDCMATIC: "USDC_POLYGON",
-    USDC_MATIC: "USDC_POLYGON",
-    POLYGON_USDC: "USDC_POLYGON",
+    BNB: "BNB_BSC",
+    BNB_BSC: "BNB_BSC",
+    BNBBSC: "BNB_BSC",
+    BSC_BNB: "BNB_BSC",
+    // Backward-compatible alias for requested wording.
+    BNB_POLYGON: "BNB_BSC",
+    BNBMATIC: "BNB_BSC",
   };
   return aliases[token] || null;
 }
 
-function defaultUsdtAsset(): CryptoAssetKey {
-  const envDefault = parseAssetAlias(String(process.env.CRYPTO_DEFAULT_USDT_ASSET || ""));
-  if (envDefault === "USDT_TRC20" || envDefault === "USDT_POLYGON") return envDefault;
-  return "USDT_TRC20";
+function defaultAsset(): CryptoAssetKey {
+  const envDefault = parseAssetAlias(String(process.env.CRYPTO_DEFAULT_ASSET || process.env.CRYPTO_DEFAULT_USDT_ASSET || ""));
+  if (envDefault) return envDefault;
+  return "BNB_BSC";
 }
 
 function fallbackAssetByCurrency(currencyRaw: unknown): CryptoAssetKey | null {
   const currency = String(currencyRaw || "").trim().toUpperCase();
-  if (currency === "USDT") return defaultUsdtAsset();
-  if (currency === "USDC") return "USDC_POLYGON";
+  if (currency === "BNB") return defaultAsset();
   return null;
 }
 
@@ -263,13 +243,13 @@ export function getNowpaymentsIpnSecret(): string {
 
 export function getAllowedCryptoAssets(): CryptoAssetKey[] {
   const fromEnv = parseCsvUpper(
-    String(process.env.CRYPTO_ALLOWED_ASSETS || "USDT_TRC20,USDT_POLYGON,USDC_POLYGON"),
+    String(process.env.CRYPTO_ALLOWED_ASSETS || "BNB_BSC"),
   )
     .map((token) => parseAssetAlias(token))
     .filter((asset): asset is CryptoAssetKey => Boolean(asset));
 
   const deduped = Array.from(new Set(fromEnv));
-  if (!deduped.length) return ["USDT_TRC20", "USDT_POLYGON", "USDC_POLYGON"];
+  if (!deduped.length) return ["BNB_BSC"];
   return deduped;
 }
 

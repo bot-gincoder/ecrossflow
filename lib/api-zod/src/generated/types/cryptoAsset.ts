@@ -9,7 +9,5 @@
 export type CryptoAsset = (typeof CryptoAsset)[keyof typeof CryptoAsset];
 
 export const CryptoAsset = {
-  USDT_TRC20: "USDT_TRC20",
-  USDT_POLYGON: "USDT_POLYGON",
-  USDC_POLYGON: "USDC_POLYGON",
+  BNB_BSC: "BNB_BSC",
 } as const;

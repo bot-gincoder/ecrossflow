@@ -195,9 +195,7 @@ export const DepositRequestPaymentMethod = {
 export type CryptoAsset = (typeof CryptoAsset)[keyof typeof CryptoAsset];
 
 export const CryptoAsset = {
-  USDT_TRC20: "USDT_TRC20",
-  USDT_POLYGON: "USDT_POLYGON",
-  USDC_POLYGON: "USDC_POLYGON",
+  BNB_BSC: "BNB_BSC",
 } as const;
 
 export interface DepositRequest {
@@ -208,7 +206,7 @@ export interface DepositRequest {
   notes?: string;
   /** URL or object reference of the payment screenshot (Moncash/NatCash) */
   evidenceUrl?: string;
-  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  /** Required when paymentMethod=CRYPTO (BNB_BSC) */
   cryptoAsset?: CryptoAsset;
 }
 
@@ -231,7 +229,7 @@ export interface WithdrawalRequest {
   destination: string;
   /** 6-digit OTP code obtained from POST /wallet/withdraw/request-otp */
   otp: string;
-  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  /** Required when paymentMethod=CRYPTO (BNB_BSC) */
   cryptoAsset?: CryptoAsset;
 }
 

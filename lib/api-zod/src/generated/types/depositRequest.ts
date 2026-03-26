@@ -16,6 +16,6 @@ export interface DepositRequest {
   notes?: string;
   /** URL or object reference of the payment screenshot (Moncash/NatCash) */
   evidenceUrl?: string;
-  /** Required when paymentMethod=CRYPTO (USDT_TRC20, USDT_POLYGON, USDC_POLYGON) */
+  /** Required when paymentMethod=CRYPTO (BNB_BSC) */
   cryptoAsset?: CryptoAsset;
 }

@@ -65,7 +65,7 @@ export async function dispatchCryptoWithdrawal(
         status: "PROCESSING",
         payoutId: existingPayoutId,
         withdrawalId: existingWithdrawalId,
-        asset: resolveCryptoAsset(baseMeta.cryptoAsset, row.currency) || "USDT_TRC20",
+        asset: resolveCryptoAsset(baseMeta.cryptoAsset, row.currency) || "BNB_BSC",
       };
     }
 
