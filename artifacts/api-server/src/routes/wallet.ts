@@ -60,10 +60,10 @@ const MAX_DEPOSIT_USD = amountLimit("MAX_DEPOSIT_USD", 10000);
 const MIN_WITHDRAW_USD = amountLimit("MIN_WITHDRAW_USD", 3);
 const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
 
-const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "BNB"]);
+const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC"]);
 const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
 const SUPPORTED_WITHDRAW_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"]);
-const BNB_PER_USD = Number.parseFloat(process.env.BNB_PER_USD || "0.0015");
+const MATIC_PER_USD = Number.parseFloat(process.env.MATIC_PER_USD || "1.1");
 
 const FIXED_RATES: Record<string, number> = {
   USD: 1,
@@ -75,7 +75,7 @@ const FIXED_RATES: Record<string, number> = {
   ETH: 0.00044,
   USDT: 1,
   USDC: 1,
-  BNB: Number.isFinite(BNB_PER_USD) && BNB_PER_USD > 0 ? BNB_PER_USD : 0.0015,
+  MATIC: Number.isFinite(MATIC_PER_USD) && MATIC_PER_USD > 0 ? MATIC_PER_USD : 1.1,
 };
 
 function parsePositiveAmount(value: unknown): number | null {
@@ -264,7 +264,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     if (!resolvedCryptoAsset) {
       res.status(400).json({
         error: "Bad Request",
-        message: "Invalid or unsupported crypto asset. Allowed: BNB(BSC)",
+        message: "Invalid or unsupported crypto asset. Allowed: MATIC(POLYGON)",
       });
       return;
     }
@@ -827,7 +827,7 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     if (!resolvedCryptoAsset) {
       res.status(400).json({
         error: "Bad Request",
-        message: "Invalid or unsupported crypto asset for withdrawal. Allowed: BNB(BSC)",
+        message: "Invalid or unsupported crypto asset for withdrawal. Allowed: MATIC(POLYGON)",
       });
       return;
     }

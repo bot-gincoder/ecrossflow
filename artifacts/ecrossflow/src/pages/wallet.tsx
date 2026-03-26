@@ -20,17 +20,17 @@ const DEPOSIT_METHODS = [
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
   { value: 'CARD', label: 'Carte Bancaire', flag: '💳', currencies: ['USD', 'EUR'] },
-  { value: 'CRYPTO', label: 'Crypto (BNB)', flag: '🪙', currencies: ['BNB'] },
+  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙', currencies: ['MATIC'] },
 ];
 
 const WITHDRAW_METHODS = [
   { value: 'MONCASH', label: 'MonCash', flag: '🇭🇹' },
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹' },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦' },
-  { value: 'CRYPTO', label: 'Crypto (BNB)', flag: '🪙' },
+  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙' },
 ];
 
-const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'BNB'];
+const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'MATIC'];
 
 type Tab = 'deposit' | 'withdraw';
 
@@ -46,7 +46,7 @@ const BANK_COORDS = {
 };
 
 const CRYPTO_ASSETS = [
-  { value: 'BNB_BSC', label: 'BNB (BSC)', ticker: 'BNB', network: 'BSC' },
+  { value: 'MATIC_POLYGON', label: 'MATIC (POLYGON)', ticker: 'MATIC', network: 'POLYGON' },
 ] as const;
 
 type CryptoAssetValue = typeof CRYPTO_ASSETS[number]['value'];
@@ -361,7 +361,7 @@ function WalletInner() {
   const [amount, setAmount] = React.useState('');
   const [currency, setCurrency] = React.useState('USD');
   const [paymentMethod, setPaymentMethod] = React.useState('MONCASH');
-  const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('BNB_BSC');
+  const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('MATIC_POLYGON');
   const [cryptoInstructions, setCryptoInstructions] = React.useState<CryptoInstructions | null>(null);
   const [reference, setReference] = React.useState('');
   const [destination, setDestination] = React.useState('');

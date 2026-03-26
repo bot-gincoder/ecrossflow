@@ -301,9 +301,9 @@ export const CreateDepositBody = zod.object({
       "URL or object reference of the payment screenshot (Moncash\/NatCash)",
     ),
   cryptoAsset: zod
-    .enum(["BNB_BSC"])
+    .enum(["MATIC_POLYGON"])
     .optional()
-    .describe("Required when paymentMethod=CRYPTO (BNB_BSC)"),
+    .describe("Required when paymentMethod=CRYPTO (MATIC_POLYGON)"),
 });
 
 /**
@@ -347,9 +347,9 @@ export const CreateWithdrawalBody = zod.object({
       "6-digit OTP code obtained from POST \/wallet\/withdraw\/request-otp",
     ),
   cryptoAsset: zod
-    .enum(["BNB_BSC"])
+    .enum(["MATIC_POLYGON"])
     .optional()
-    .describe("Required when paymentMethod=CRYPTO (BNB_BSC)"),
+    .describe("Required when paymentMethod=CRYPTO (MATIC_POLYGON)"),
 });
 
 /**
@@ -446,7 +446,7 @@ export const GetTransactionsResponse = zod.object({
           payCurrency: zod.string(),
           network: zod.string().nullish(),
           expiresAt: zod.date().nullish(),
-          asset: zod.enum(["BNB_BSC"]),
+          asset: zod.enum(["MATIC_POLYGON"]),
           assetLabel: zod.string(),
         })
         .nullish(),
@@ -457,7 +457,7 @@ export const GetTransactionsResponse = zod.object({
           payoutId: zod.string(),
           withdrawalId: zod.string(),
           status: zod.string(),
-          asset: zod.enum(["BNB_BSC"]),
+          asset: zod.enum(["MATIC_POLYGON"]),
         })
         .nullish(),
       createdAt: zod.date(),

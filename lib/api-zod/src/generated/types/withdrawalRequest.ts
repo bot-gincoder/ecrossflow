@@ -15,6 +15,6 @@ export interface WithdrawalRequest {
   destination: string;
   /** 6-digit OTP code obtained from POST /wallet/withdraw/request-otp */
   otp: string;
-  /** Required when paymentMethod=CRYPTO (BNB_BSC) */
+  /** Required when paymentMethod=CRYPTO (MATIC_POLYGON) */
   cryptoAsset?: CryptoAsset;
 }
