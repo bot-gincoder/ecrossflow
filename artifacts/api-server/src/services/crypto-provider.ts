@@ -4,6 +4,7 @@ type JsonObject = Record<string, unknown>;
 
 export type CryptoAssetKey = "MATIC_POLYGON";
 export type CryptoWithdrawMode = "AUTO" | "SEMI_AUTO";
+export type CryptoDepositProvider = "NOWPAYMENTS" | "OXAPAY";
 
 type CryptoAssetDef = {
   key: CryptoAssetKey;
@@ -11,6 +12,8 @@ type CryptoAssetDef = {
   ticker: "MATIC";
   network: "POLYGON";
   nowCurrency: "maticmainnet";
+  oxaCurrency: "POL";
+  oxaNetwork: "Polygon Network";
 };
 
 export const CRYPTO_ASSET_DEFS: Record<CryptoAssetKey, CryptoAssetDef> = {
@@ -20,10 +23,13 @@ export const CRYPTO_ASSET_DEFS: Record<CryptoAssetKey, CryptoAssetDef> = {
     ticker: "MATIC",
     network: "POLYGON",
     nowCurrency: "maticmainnet",
+    oxaCurrency: "POL",
+    oxaNetwork: "Polygon Network",
   },
 };
 
 const DEFAULT_API_BASE = "https://api.nowpayments.io";
+const DEFAULT_OXAPAY_API_BASE = "https://api.oxapay.com";
 let cachedPayoutToken: { value: string; expiresAt: number } | null = null;
 
 function envBool(key: string, fallback = false): boolean {
@@ -59,6 +65,14 @@ function getApiKey(): string {
   return String(process.env.NOWPAYMENTS_API_KEY || "").trim();
 }
 
+function getOxaPayApiBase(): string {
+  return sanitizeBaseUrl(process.env.OXAPAY_API_BASE, DEFAULT_OXAPAY_API_BASE);
+}
+
+function getOxaPayMerchantApiKey(): string {
+  return String(process.env.OXAPAY_MERCHANT_API_KEY || "").trim();
+}
+
 function getIpnSecret(): string {
   return String(
     process.env.NOWPAYMENTS_IPN_SECRET
@@ -66,6 +80,10 @@ function getIpnSecret(): string {
       || process.env.PAYMENT_WEBHOOK_SECRET
       || "",
   ).trim();
+}
+
+function getOxaPayCallbackToken(): string {
+  return String(process.env.OXAPAY_CALLBACK_TOKEN || "").trim();
 }
 
 function getPayoutEmail(): string {
@@ -180,6 +198,30 @@ async function nowpaymentsRequest(args: {
   return { status: res.status, data };
 }
 
+async function oxaPayRequest(args: {
+  method: "GET" | "POST";
+  path: string;
+  body?: JsonObject;
+}): Promise<{ status: number; data: JsonObject }> {
+  const apiBase = getOxaPayApiBase();
+  const key = getOxaPayMerchantApiKey();
+  if (!key) throw new Error("OXAPAY_DEPOSIT_NOT_CONFIGURED");
+
+  const headers: Record<string, string> = {
+    accept: "application/json",
+    merchant_api_key: key,
+  };
+  if (args.body) headers["content-type"] = "application/json";
+
+  const res = await fetchWithTimeout(`${apiBase}${args.path}`, {
+    method: args.method,
+    headers,
+    ...(args.body ? { body: JSON.stringify(args.body) } : {}),
+  });
+  const data = await parseJsonResponse(res);
+  return { status: res.status, data };
+}
+
 function getAppUrl(): string | null {
   const raw = String(process.env.APP_URL || "").trim();
   if (!raw || !/^https?:\/\//i.test(raw)) return null;
@@ -189,7 +231,13 @@ function getAppUrl(): string | null {
 function buildWebhookUrl(): string | null {
   const appUrl = getAppUrl();
   if (!appUrl) return null;
-  return `${appUrl}/api/payments/webhook/crypto`;
+  const base = `${appUrl}/api/payments/webhook/crypto`;
+  const provider = getCryptoDepositProvider();
+  if (provider !== "OXAPAY") return base;
+  const token = getOxaPayCallbackToken();
+  const params = new URLSearchParams({ provider: "OXAPAY" });
+  if (token) params.set("token", token);
+  return `${base}?${params.toString()}`;
 }
 
 async function getPayoutJwtToken(forceRefresh = false): Promise<string> {
@@ -229,7 +277,19 @@ export function getCryptoWithdrawMode(): CryptoWithdrawMode {
   return "SEMI_AUTO";
 }
 
+export function getCryptoDepositProvider(): CryptoDepositProvider {
+  const mode = String(process.env.CRYPTO_DEPOSIT_PROVIDER || "AUTO").trim().toUpperCase();
+  const oxaReady = Boolean(getOxaPayMerchantApiKey());
+  const nowReady = Boolean(getApiKey());
+  if (mode === "OXAPAY") return "OXAPAY";
+  if (mode === "NOWPAYMENTS") return "NOWPAYMENTS";
+  if (oxaReady) return "OXAPAY";
+  return "NOWPAYMENTS";
+}
+
 export function isCryptoDepositConfigured(): boolean {
+  const provider = getCryptoDepositProvider();
+  if (provider === "OXAPAY") return Boolean(getOxaPayMerchantApiKey());
   return Boolean(getApiKey());
 }
 
@@ -269,6 +329,7 @@ export function getCryptoAssetMeta(asset: CryptoAssetKey): CryptoAssetDef {
 }
 
 export type CreatedCryptoDeposit = {
+  provider: CryptoDepositProvider;
   paymentId: string;
   paymentStatus: string;
   payAddress: string;
@@ -285,10 +346,54 @@ export async function createCustodialCryptoDeposit(args: {
   description: string;
   asset: CryptoAssetKey;
 }): Promise<CreatedCryptoDeposit> {
-  if (!isCryptoDepositConfigured()) throw new Error("CRYPTO_DEPOSIT_NOT_CONFIGURED");
-
+  const provider = getCryptoDepositProvider();
+  if (!isCryptoDepositConfigured()) throw new Error(`${provider}_DEPOSIT_NOT_CONFIGURED`);
   const assetMeta = getCryptoAssetMeta(args.asset);
   const webhookUrl = buildWebhookUrl();
+
+  if (provider === "OXAPAY") {
+    const body: JsonObject = {
+      amount: round2(args.amountUsd),
+      currency: "USD",
+      pay_currency: assetMeta.oxaCurrency,
+      network: assetMeta.oxaNetwork,
+      lifetime: envNumber("OXAPAY_PAYMENT_LIFETIME_MINUTES", 60),
+      fee_paid_by_payer: envBool("OXAPAY_FEE_PAID_BY_PAYER", true) ? 1 : 0,
+      under_paid_coverage: envNumber("OXAPAY_UNDERPAID_COVERAGE_PERCENT", 0),
+      order_id: args.referenceId,
+      description: args.description,
+    };
+    if (webhookUrl) body.callback_url = webhookUrl;
+
+    const response = await oxaPayRequest({
+      method: "POST",
+      path: "/v1/payment/white-label",
+      body,
+    });
+    if (response.status !== 200) {
+      throw new Error(`OXAPAY_CREATE_PAYMENT_FAILED:${response.status}:${String(response.data.message || (response.data.error as JsonObject | undefined)?.message || "UNKNOWN")}`);
+    }
+    const data = (response.data.data && typeof response.data.data === "object")
+      ? response.data.data as JsonObject
+      : response.data;
+    const paymentId = String(data.track_id || "").trim();
+    const payAddress = String(data.address || "").trim();
+    if (!paymentId || !payAddress) {
+      throw new Error("OXAPAY_CREATE_PAYMENT_INVALID_RESPONSE");
+    }
+    return {
+      provider: "OXAPAY",
+      paymentId,
+      paymentStatus: String(data.status || "waiting").toLowerCase(),
+      payAddress,
+      payAmount: parseAmount(data.pay_amount as string | number | null | undefined),
+      payCurrency: String(data.pay_currency || assetMeta.oxaCurrency),
+      network: data.network ? String(data.network) : assetMeta.oxaNetwork,
+      expiresAt: data.expired_at ? new Date(Number(data.expired_at) * 1000).toISOString() : null,
+      raw: response.data,
+    };
+  }
+
   const body: JsonObject = {
     price_amount: round2(args.amountUsd),
     price_currency: "usd",
@@ -317,6 +422,7 @@ export async function createCustodialCryptoDeposit(args: {
   }
 
   return {
+    provider: "NOWPAYMENTS",
     paymentId,
     paymentStatus: String(response.data.payment_status || "waiting").toLowerCase(),
     payAddress,
@@ -328,10 +434,22 @@ export async function createCustodialCryptoDeposit(args: {
   };
 }
 
-export async function getCustodialCryptoDepositStatus(paymentId: string): Promise<JsonObject> {
-  if (!isCryptoDepositConfigured()) throw new Error("CRYPTO_DEPOSIT_NOT_CONFIGURED");
-  const normalized = String(paymentId || "").trim();
-  if (!normalized) throw new Error("NOWPAYMENTS_PAYMENT_ID_REQUIRED");
+export async function getCustodialCryptoDepositStatus(args: { paymentId: string; provider?: CryptoDepositProvider }): Promise<JsonObject> {
+  const provider = args.provider || getCryptoDepositProvider();
+  if (!isCryptoDepositConfigured()) throw new Error(`${provider}_DEPOSIT_NOT_CONFIGURED`);
+  const normalized = String(args.paymentId || "").trim();
+  if (!normalized) throw new Error(`${provider}_PAYMENT_ID_REQUIRED`);
+
+  if (provider === "OXAPAY") {
+    const response = await oxaPayRequest({
+      method: "GET",
+      path: `/v1/payment/${encodeURIComponent(normalized)}`,
+    });
+    if (response.status !== 200) {
+      throw new Error(`OXAPAY_GET_PAYMENT_FAILED:${response.status}:${String(response.data.message || (response.data.error as JsonObject | undefined)?.message || "UNKNOWN")}`);
+    }
+    return response.data;
+  }
 
   const response = await nowpaymentsRequest({
     method: "GET",
@@ -449,6 +567,15 @@ export type CanonicalNowpaymentsEvent = {
   status: "COMPLETED" | "FAILED" | "CANCELLED" | null;
 };
 
+export type CanonicalOxaPayEvent = {
+  eventId: string;
+  eventType: "OXAPAY_PAYMENT";
+  referenceId: string;
+  providerTxId: string;
+  rawStatus: string;
+  status: "COMPLETED" | "FAILED" | "CANCELLED" | null;
+};
+
 export function canonicalizeNowpaymentsEvent(payload: JsonObject): CanonicalNowpaymentsEvent | null {
   const paymentId = String(payload.payment_id || "").trim();
   const paymentRef = String(payload.order_id || payload.reference_id || "").trim();
@@ -494,4 +621,37 @@ export function verifyNowpaymentsSignature(payload: JsonObject, providedSignatur
   const a = Buffer.from(expected);
   const b = Buffer.from(providedSignature);
   return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function mapOxaPayDepositStatus(raw: string): "COMPLETED" | "FAILED" | "CANCELLED" | null {
+  const status = raw.trim().toLowerCase();
+  if (!status) return null;
+  if (status === "paid" || status === "manual_accept") return "COMPLETED";
+  if (status === "refunded") return "FAILED";
+  if (status === "expired" || status === "canceled") return "CANCELLED";
+  return null;
+}
+
+export function canonicalizeOxaPayEvent(payload: JsonObject): CanonicalOxaPayEvent | null {
+  const data = (payload.data && typeof payload.data === "object")
+    ? payload.data as JsonObject
+    : payload;
+  const providerTxId = String(data.track_id || payload.track_id || "").trim();
+  const referenceId = String(data.order_id || payload.order_id || payload.reference_id || "").trim();
+  const rawStatus = String(data.status || payload.status || "").trim().toLowerCase();
+  if (!providerTxId || !referenceId || !rawStatus) return null;
+  return {
+    eventId: `oxapay:payment:${providerTxId}:${rawStatus}`,
+    eventType: "OXAPAY_PAYMENT",
+    referenceId,
+    providerTxId,
+    rawStatus,
+    status: mapOxaPayDepositStatus(rawStatus),
+  };
+}
+
+export function verifyOxaPayCallbackToken(providedToken: string | null | undefined): boolean {
+  const expected = getOxaPayCallbackToken();
+  if (!expected) return true;
+  return String(providedToken || "").trim() === expected;
 }

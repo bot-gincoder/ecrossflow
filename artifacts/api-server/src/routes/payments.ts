@@ -10,7 +10,9 @@ import {
 import { creditAvailableFromTreasury, ensureLedgerInfra, releaseBlockedToAvailable, settleBlockedToTreasury } from "../lib/ledger.js";
 import {
   canonicalizeNowpaymentsEvent,
+  canonicalizeOxaPayEvent,
   getNowpaymentsIpnSecret,
+  verifyOxaPayCallbackToken,
   verifyNowpaymentsSignature,
 } from "../services/crypto-provider.js";
 
@@ -379,6 +381,56 @@ router.post("/payments/webhook/crypto", async (req, res) => {
   await ensureLedgerInfra();
 
   const payload = (req.body || {}) as Record<string, unknown>;
+  const hintedProvider = String(req.query.provider || "").trim().toUpperCase();
+  if (hintedProvider === "OXAPAY" || payload.track_id || (payload.data && typeof payload.data === "object" && (payload.data as Record<string, unknown>).track_id)) {
+    const token = String(req.query.token || "");
+    if (!verifyOxaPayCallbackToken(token)) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid OxaPay callback token" });
+      return;
+    }
+    const canonicalOxa = canonicalizeOxaPayEvent(payload);
+    if (!canonicalOxa) {
+      res.status(400).json({ error: "Bad Request", message: "Invalid OxaPay payload" });
+      return;
+    }
+    if (!canonicalOxa.status) {
+      await recordIgnoredEvent({
+        provider: "CRYPTO",
+        eventId: canonicalOxa.eventId,
+        eventType: canonicalOxa.eventType,
+        referenceId: canonicalOxa.referenceId,
+        payload,
+        reason: `IGNORED_STATUS:${canonicalOxa.rawStatus}`,
+      });
+      res.json({ ok: true, ignored: true, status: canonicalOxa.rawStatus });
+      return;
+    }
+    try {
+      const outcome = await processWebhookEvent("CRYPTO", {
+        eventId: canonicalOxa.eventId,
+        eventType: canonicalOxa.eventType,
+        referenceId: canonicalOxa.referenceId,
+        status: canonicalOxa.status,
+        providerTxId: canonicalOxa.providerTxId,
+      }, payload);
+      if ("alreadyProcessed" in outcome) {
+        res.json({ ok: true, alreadyProcessed: true });
+        return;
+      }
+      res.json({ ok: true, ...outcome });
+      return;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "WEBHOOK_PROCESSING_ERROR";
+      if (msg === "WALLET_NOT_FOUND") {
+        res.status(422).json({ error: "Unprocessable Entity", message: "Wallet not found for transaction user" });
+        return;
+      }
+      console.error("OxaPay webhook processing failed:", error);
+      res.status(500).json({ error: "Internal Server Error", message: "Webhook processing failed" });
+      return;
+    }
+  }
+
   const signature = String(req.get("x-nowpayments-sig") || "");
   const secret = getNowpaymentsIpnSecret();
 

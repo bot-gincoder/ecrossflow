@@ -20,6 +20,7 @@ import {
 } from "../lib/ledger.js";
 import { isMoncashAutoDepositEnabled, moncashCreatePayment, moncashRetrieveOrderPayment } from "../services/moncash.js";
 import {
+  getCryptoDepositProvider,
   createCustodialCryptoDeposit,
   getCustodialCryptoDepositStatus,
   getCryptoAssetMeta,
@@ -88,9 +89,10 @@ function parsePositiveAmount(value: unknown): number | null {
 function mapCryptoDepositProviderStatus(raw: unknown): "COMPLETED" | "FAILED" | "CANCELLED" | null {
   const status = String(raw || "").trim().toLowerCase();
   if (!status) return null;
-  if (status === "finished") return "COMPLETED";
+  if (status === "finished" || status === "paid" || status === "manual_accept") return "COMPLETED";
   if (status === "failed") return "FAILED";
-  if (status === "refunded" || status === "expired") return "CANCELLED";
+  if (status === "refunded") return "FAILED";
+  if (status === "expired" || status === "canceled") return "CANCELLED";
   return null;
 }
 
@@ -391,7 +393,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
       });
       const assetMeta = getCryptoAssetMeta(resolvedCryptoAsset);
       cryptoInstructions = {
-        provider: "NOWPAYMENTS",
+        provider: payment.provider,
         paymentId: payment.paymentId,
         payAddress: payment.payAddress,
         payAmount: payment.payAmount,
@@ -403,7 +405,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
       };
       const nextMeta = {
         ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: "NOWPAYMENTS",
+        provider: payment.provider,
         cryptoAsset: resolvedCryptoAsset,
         nowpayments: {
           paymentId: payment.paymentId,
@@ -415,6 +417,18 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
           expiresAt: payment.expiresAt,
           createdAt: new Date().toISOString(),
         },
+        ...(payment.provider === "OXAPAY" ? {
+          oxapay: {
+            trackId: payment.paymentId,
+            payAddress: payment.payAddress,
+            payAmount: payment.payAmount,
+            payCurrency: payment.payCurrency,
+            network: payment.network || assetMeta.network,
+            status: payment.paymentStatus,
+            expiresAt: payment.expiresAt,
+            createdAt: new Date().toISOString(),
+          },
+        } : {}),
       };
       await db.update(transactionsTable)
         .set({ metadata: nextMeta, updatedAt: new Date() })
@@ -423,14 +437,14 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
       const providerErrorDetail = error instanceof Error ? error.message : "NOWPAYMENTS_CREATE_PAYMENT_FAILED";
       const nextMeta = {
         ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: "NOWPAYMENTS",
+        provider: getCryptoDepositProvider(),
         cryptoAsset: resolvedCryptoAsset,
-        nowpaymentsError: providerErrorDetail,
+        providerError: providerErrorDetail,
       };
       await db.update(transactionsTable)
         .set({ status: "FAILED", metadata: nextMeta, updatedAt: new Date(), adminNote: "Crypto deposit initialization failed" })
         .where(eq(transactionsTable.id, tx.id));
-      if (providerErrorDetail.toLowerCase().includes("amountto is too small")) {
+      if (providerErrorDetail.toLowerCase().includes("amountto is too small") || providerErrorDetail.toLowerCase().includes("amount is less than")) {
         res.status(400).json({
           error: "Bad Request",
           code: "CRYPTO_PROVIDER_MIN_AMOUNT",
@@ -611,10 +625,14 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
   const meta = depositTx.metadata && typeof depositTx.metadata === "object"
     ? depositTx.metadata as Record<string, unknown>
     : {};
+  const provider = String(meta.provider || "NOWPAYMENTS").toUpperCase();
   const nowMeta = meta.nowpayments && typeof meta.nowpayments === "object"
     ? meta.nowpayments as Record<string, unknown>
     : {};
-  const paymentId = String(nowMeta.paymentId || "").trim();
+  const oxaMeta = meta.oxapay && typeof meta.oxapay === "object"
+    ? meta.oxapay as Record<string, unknown>
+    : {};
+  const paymentId = String(nowMeta.paymentId || oxaMeta.trackId || "").trim();
   if (!paymentId) {
     res.status(400).json({ error: "Bad Request", message: "Missing crypto provider payment id on transaction" });
     return;
@@ -622,7 +640,7 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
 
   let providerData: Record<string, unknown>;
   try {
-    providerData = await getCustodialCryptoDepositStatus(paymentId);
+    providerData = await getCustodialCryptoDepositStatus({ paymentId, provider: provider === "OXAPAY" ? "OXAPAY" : "NOWPAYMENTS" });
   } catch (error) {
     res.status(502).json({
       error: "Bad Gateway",
@@ -632,7 +650,10 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
     return;
   }
 
-  const providerStatusRaw = String(providerData.payment_status || providerData.status || "").toLowerCase();
+  const providerDataInner = providerData.data && typeof providerData.data === "object"
+    ? providerData.data as Record<string, unknown>
+    : providerData;
+  const providerStatusRaw = String(providerDataInner.payment_status || providerDataInner.status || "").toLowerCase();
   const canonical = mapCryptoDepositProviderStatus(providerStatusRaw);
   if (!canonical) {
     res.status(409).json({
@@ -662,15 +683,15 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
         idempotencyKey: `deposit:settle:${current.id}`,
         description: `Deposit confirmed by crypto provider ${current.referenceId || current.id}`,
         metadata: {
-          provider: "NOWPAYMENTS",
-          providerTxId: String(providerData.payment_id || paymentId),
+          provider,
+          providerTxId: String(providerDataInner.payment_id || providerDataInner.track_id || paymentId),
           phase: "DEPOSIT_SETTLED",
         },
       });
 
       const nextMeta = {
         ...(current.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {}),
-        provider: "NOWPAYMENTS",
+        provider,
         webhookStatus: providerStatusRaw,
         nowpayments: {
           ...(current.metadata && typeof current.metadata === "object" && (current.metadata as Record<string, unknown>).nowpayments && typeof (current.metadata as Record<string, unknown>).nowpayments === "object"
@@ -699,8 +720,8 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
     res.json({
       ok: true,
       status: "COMPLETED",
-      provider: "NOWPAYMENTS",
-      providerTxId: String(providerData.payment_id || paymentId),
+      provider,
+      providerTxId: String(providerDataInner.payment_id || providerDataInner.track_id || paymentId),
     });
     return;
   }
@@ -711,7 +732,7 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
       updatedAt: new Date(),
       metadata: {
         ...meta,
-        provider: "NOWPAYMENTS",
+        provider,
         webhookStatus: providerStatusRaw,
       },
     })
@@ -720,7 +741,7 @@ router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (r
   res.json({
     ok: true,
     status: canonical,
-    provider: "NOWPAYMENTS",
+    provider,
     providerStatus: providerStatusRaw || "unknown",
   });
 });
