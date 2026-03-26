@@ -10,4 +10,5 @@ export type CryptoAsset = (typeof CryptoAsset)[keyof typeof CryptoAsset];
 
 export const CryptoAsset = {
   MATIC_POLYGON: "MATIC_POLYGON",
+  BNB_BSC: "BNB_BSC",
 } as const;

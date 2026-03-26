@@ -62,7 +62,7 @@ const MIN_WITHDRAW_USD = amountLimit("MIN_WITHDRAW_USD", 3);
 const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
 const CRYPTO_PROVIDER_MIN_DEPOSIT_USD = amountLimit("CRYPTO_PROVIDER_MIN_DEPOSIT_USD", 7);
 
-const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC"]);
+const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC", "BNB"]);
 const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
 const SUPPORTED_WITHDRAW_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"]);
 const MATIC_PER_USD = Number.parseFloat(process.env.MATIC_PER_USD || "1.1");
@@ -267,7 +267,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     if (!resolvedCryptoAsset) {
       res.status(400).json({
         error: "Bad Request",
-        message: "Invalid or unsupported crypto asset. Allowed: MATIC(POLYGON)",
+        message: "Invalid or unsupported crypto asset. Allowed: MATIC(POLYGON), BNB(BSC)",
       });
       return;
     }
@@ -445,10 +445,11 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
         .set({ status: "FAILED", metadata: nextMeta, updatedAt: new Date(), adminNote: "Crypto deposit initialization failed" })
         .where(eq(transactionsTable.id, tx.id));
       if (providerErrorDetail.toLowerCase().includes("amountto is too small") || providerErrorDetail.toLowerCase().includes("amount is less than")) {
+        const selectedAssetLabel = resolvedCryptoAsset ? getCryptoAssetMeta(resolvedCryptoAsset).label : "selected crypto network";
         res.status(400).json({
           error: "Bad Request",
           code: "CRYPTO_PROVIDER_MIN_AMOUNT",
-          message: `Network minimum is currently about $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} for MATIC (Polygon). Please deposit at least $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} plus network fees.`,
+          message: `Network minimum is currently about $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} for ${selectedAssetLabel}. Please deposit at least $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} plus network fees.`,
         });
         return;
       }

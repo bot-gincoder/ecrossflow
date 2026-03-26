@@ -20,17 +20,17 @@ const DEPOSIT_METHODS = [
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
   { value: 'CARD', label: 'Carte Bancaire', flag: '💳', currencies: ['USD', 'EUR'] },
-  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙', currencies: ['USD'] },
+  { value: 'CRYPTO', label: 'Crypto (Polygon/BSC)', flag: '🪙', currencies: ['USD'] },
 ];
 
 const WITHDRAW_METHODS = [
   { value: 'MONCASH', label: 'MonCash', flag: '🇭🇹' },
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹' },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦' },
-  { value: 'CRYPTO', label: 'Crypto (Polygon)', flag: '🪙' },
+  { value: 'CRYPTO', label: 'Crypto (Polygon/BSC)', flag: '🪙' },
 ];
 
-const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'MATIC'];
+const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'MATIC', 'BNB'];
 const APP_MIN_DEPOSIT_USD = 2;
 const APP_MIN_WITHDRAW_USD = 3;
 const NETWORK_SOFT_MIN_USD = 7;
@@ -50,6 +50,7 @@ const BANK_COORDS = {
 
 const CRYPTO_ASSETS = [
   { value: 'MATIC_POLYGON', label: 'MATIC (POLYGON)', ticker: 'MATIC', network: 'POLYGON' },
+  { value: 'BNB_BSC', label: 'BNB (BSC)', ticker: 'BNB', network: 'BSC' },
 ] as const;
 
 type CryptoAssetValue = typeof CRYPTO_ASSETS[number]['value'];

@@ -2,18 +2,18 @@ import { createHmac, timingSafeEqual } from "crypto";
 
 type JsonObject = Record<string, unknown>;
 
-export type CryptoAssetKey = "MATIC_POLYGON";
+export type CryptoAssetKey = "MATIC_POLYGON" | "BNB_BSC";
 export type CryptoWithdrawMode = "AUTO" | "SEMI_AUTO";
 export type CryptoDepositProvider = "NOWPAYMENTS" | "OXAPAY";
 
 type CryptoAssetDef = {
   key: CryptoAssetKey;
-  label: "MATIC (POLYGON)";
-  ticker: "MATIC";
-  network: "POLYGON";
-  nowCurrency: "maticmainnet";
-  oxaCurrency: "POL";
-  oxaNetwork: "Polygon Network";
+  label: "MATIC (POLYGON)" | "BNB (BSC)";
+  ticker: "MATIC" | "BNB";
+  network: "POLYGON" | "BSC";
+  nowCurrency: "maticmainnet" | "bnbbsc";
+  oxaCurrency: "POL" | "BNB";
+  oxaNetwork: "Polygon Network" | "BSC Network";
 };
 
 export const CRYPTO_ASSET_DEFS: Record<CryptoAssetKey, CryptoAssetDef> = {
@@ -25,6 +25,15 @@ export const CRYPTO_ASSET_DEFS: Record<CryptoAssetKey, CryptoAssetDef> = {
     nowCurrency: "maticmainnet",
     oxaCurrency: "POL",
     oxaNetwork: "Polygon Network",
+  },
+  BNB_BSC: {
+    key: "BNB_BSC",
+    label: "BNB (BSC)",
+    ticker: "BNB",
+    network: "BSC",
+    nowCurrency: "bnbbsc",
+    oxaCurrency: "BNB",
+    oxaNetwork: "BSC Network",
   },
 };
 
@@ -110,8 +119,14 @@ function parseAssetAlias(raw: string): CryptoAssetKey | null {
     MATIC_POLYGON: "MATIC_POLYGON",
     MATICMAINNET: "MATIC_POLYGON",
     POLYGON_MATIC: "MATIC_POLYGON",
+    BNB: "BNB_BSC",
+    BNB_BSC: "BNB_BSC",
+    BNBBSC: "BNB_BSC",
+    BSC_BNB: "BNB_BSC",
+    BNB_SMART_CHAIN: "BNB_BSC",
+    BNB_BSC_MAINNET: "BNB_BSC",
     // Accept user wording and map it to Polygon-native route.
-    BNB_POLYGON: "MATIC_POLYGON",
+    BNB_POLYGON: "BNB_BSC",
   };
   return aliases[token] || null;
 }
@@ -125,6 +140,7 @@ function defaultAsset(): CryptoAssetKey {
 function fallbackAssetByCurrency(currencyRaw: unknown): CryptoAssetKey | null {
   const currency = String(currencyRaw || "").trim().toUpperCase();
   if (currency === "MATIC") return defaultAsset();
+  if (currency === "BNB") return "BNB_BSC";
   return null;
 }
 
@@ -303,13 +319,13 @@ export function getNowpaymentsIpnSecret(): string {
 
 export function getAllowedCryptoAssets(): CryptoAssetKey[] {
   const fromEnv = parseCsvUpper(
-    String(process.env.CRYPTO_ALLOWED_ASSETS || "MATIC_POLYGON"),
+    String(process.env.CRYPTO_ALLOWED_ASSETS || "MATIC_POLYGON,BNB_BSC"),
   )
     .map((token) => parseAssetAlias(token))
     .filter((asset): asset is CryptoAssetKey => Boolean(asset));
 
   const deduped = Array.from(new Set(fromEnv));
-  if (!deduped.length) return ["MATIC_POLYGON"];
+  if (!deduped.length) return ["MATIC_POLYGON", "BNB_BSC"];
   return deduped;
 }
 
