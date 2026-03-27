@@ -8,9 +8,12 @@
     "seed": "tsx ./src/seed.ts",
     "e2e:payments": "tsx ./src/e2e-payments.ts",
     "reconcile:ledger": "tsx ./src/reconcile-ledger.ts",
+    "circle:init-entity-secret": "tsx ./src/circle-init-entity-secret.ts",
+    "circle:create-wallet-set": "tsx ./src/circle-create-wallet-set.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@circle-fin/developer-controlled-wallets": "^10.2.0",
     "@workspace/db": "workspace:*",
     "bcryptjs": "^3.0.2",
     "drizzle-orm": "catalog:"

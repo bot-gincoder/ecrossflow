@@ -1,0 +1,13 @@
+.git
+.gitignore
+node_modules
+**/node_modules
+dist
+**/dist
+.cache
+.local
+.config
+.agents
+attached_assets
+*.log
+.env

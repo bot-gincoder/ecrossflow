@@ -10,8 +10,17 @@ import {
   notificationsTable,
   ledgerEntriesTable,
   ledgerAccountsTable,
+  referralsTable,
+  bonusesTable,
+  otpCodesTable,
+  paymentEventsTable,
+  userWalletsTable,
+  internalWalletBalancesTable,
+  depositsTable,
+  withdrawalsTable,
+  walletAuditLogsTable,
 } from "@workspace/db";
-import { eq, desc, ilike, and, count, or, gte, sql, lt, aliasedTable } from "drizzle-orm";
+import { eq, desc, ilike, and, count, or, gte, sql, lt, aliasedTable, inArray } from "drizzle-orm";
 import { requireAdmin, type AuthRequest } from "../middlewares/auth.js";
 import {
   adjustAvailableWithTreasury,
@@ -46,6 +55,128 @@ function parseDestination(metadata: unknown, description: string | null): string
   }
   return "";
 }
+
+function isProtectedSystemUser(user: { username: string }): boolean {
+  const uname = user.username.toLowerCase();
+  return uname === "admin" || uname === "ceo";
+}
+
+async function hardDeleteUserData(userId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const doomedAccounts = await tx.select({ id: ledgerAccountsTable.id })
+      .from(ledgerAccountsTable)
+      .where(eq(ledgerAccountsTable.userId, userId));
+    const doomedAccountIds = doomedAccounts.map((a) => a.id);
+
+    const doomedTx = await tx.select({ id: transactionsTable.id })
+      .from(transactionsTable)
+      .where(eq(transactionsTable.userId, userId));
+    const doomedTxIds = doomedTx.map((t) => t.id);
+
+    if (doomedTxIds.length) {
+      await tx.delete(paymentEventsTable).where(inArray(paymentEventsTable.transactionId, doomedTxIds));
+    }
+    await tx.update(transactionsTable).set({ toUserId: null }).where(eq(transactionsTable.toUserId, userId));
+
+    if (doomedTxIds.length) {
+      await tx.delete(ledgerEntriesTable).where(or(
+        inArray(ledgerEntriesTable.transactionId, doomedTxIds),
+        doomedAccountIds.length
+          ? or(
+              inArray(ledgerEntriesTable.debitAccountId, doomedAccountIds),
+              inArray(ledgerEntriesTable.creditAccountId, doomedAccountIds),
+            )
+          : sql`false`,
+      ));
+      await tx.delete(withdrawalsTable).where(inArray(withdrawalsTable.transactionId, doomedTxIds));
+      await tx.delete(transactionsTable).where(inArray(transactionsTable.id, doomedTxIds));
+    } else if (doomedAccountIds.length) {
+      await tx.delete(ledgerEntriesTable).where(or(
+        inArray(ledgerEntriesTable.debitAccountId, doomedAccountIds),
+        inArray(ledgerEntriesTable.creditAccountId, doomedAccountIds),
+      ));
+    }
+
+    await tx.delete(walletAuditLogsTable).where(eq(walletAuditLogsTable.userId, userId));
+    await tx.delete(depositsTable).where(eq(depositsTable.userId, userId));
+    await tx.delete(withdrawalsTable).where(eq(withdrawalsTable.userId, userId));
+    await tx.delete(internalWalletBalancesTable).where(eq(internalWalletBalancesTable.userId, userId));
+    await tx.delete(userWalletsTable).where(eq(userWalletsTable.userId, userId));
+
+    await tx.update(boardInstancesTable).set({ rankerId: null }).where(eq(boardInstancesTable.rankerId, userId));
+    await tx.delete(boardParticipantsTable).where(eq(boardParticipantsTable.userId, userId));
+    await tx.delete(notificationsTable).where(eq(notificationsTable.userId, userId));
+    await tx.delete(otpCodesTable).where(eq(otpCodesTable.userId, userId));
+    await tx.delete(bonusesTable).where(eq(bonusesTable.userId, userId));
+    await tx.delete(referralsTable).where(or(
+      eq(referralsTable.referrerId, userId),
+      eq(referralsTable.referredId, userId),
+    ));
+    await tx.delete(walletsTable).where(eq(walletsTable.userId, userId));
+    await tx.delete(ledgerAccountsTable).where(eq(ledgerAccountsTable.userId, userId));
+    await tx.delete(usersTable).where(eq(usersTable.id, userId));
+  });
+}
+
+router.post("/admin/users/bulk-action", requireAdmin as never, async (req: AuthRequest, res) => {
+  const { action, userIds, search, status } = req.body as {
+    action?: "activate" | "suspend" | "delete";
+    userIds?: string[] | "all";
+    search?: string;
+    status?: "PENDING" | "ACTIVE" | "SUSPENDED";
+  };
+
+  if (!action || !["activate", "suspend", "delete"].includes(action)) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid bulk action" });
+    return;
+  }
+
+  let targets: { id: string; username: string }[] = [];
+  if (userIds === "all") {
+    const conditions = [];
+    if (search) conditions.push(or(ilike(usersTable.username, `%${search}%`), ilike(usersTable.email, `%${search}%`)));
+    if (status) conditions.push(eq(usersTable.status, status));
+    targets = await db.select({ id: usersTable.id, username: usersTable.username })
+      .from(usersTable)
+      .where(conditions.length ? and(...conditions) : undefined);
+  } else {
+    const ids = (userIds || []).filter((id) => isValidId(String(id)));
+    if (!ids.length) {
+      res.status(400).json({ error: "Bad Request", message: "No valid users selected" });
+      return;
+    }
+    targets = await db.select({ id: usersTable.id, username: usersTable.username })
+      .from(usersTable)
+      .where(inArray(usersTable.id, ids));
+  }
+
+  const actionable = targets.filter((u) => !isProtectedSystemUser(u));
+  if (!actionable.length) {
+    res.json({ message: "No actionable users found", affected: 0 });
+    return;
+  }
+
+  if (action === "activate") {
+    await db.update(usersTable)
+      .set({ status: "ACTIVE", activatedAt: new Date() })
+      .where(inArray(usersTable.id, actionable.map((u) => u.id)));
+    res.json({ message: "Users activated", affected: actionable.length });
+    return;
+  }
+
+  if (action === "suspend") {
+    await db.update(usersTable)
+      .set({ status: "SUSPENDED" })
+      .where(inArray(usersTable.id, actionable.map((u) => u.id)));
+    res.json({ message: "Users suspended", affected: actionable.length });
+    return;
+  }
+
+  for (const user of actionable) {
+    await hardDeleteUserData(user.id);
+  }
+  res.json({ message: "Users deleted", affected: actionable.length });
+});
 
 router.get("/admin/stats", requireAdmin as never, async (req: AuthRequest, res) => {
   const now = new Date();
@@ -249,6 +380,31 @@ router.put("/admin/users/:id/activate", requireAdmin as never, async (req: AuthR
   });
 
   res.json({ message: "User activated" });
+});
+
+router.delete("/admin/users/:id", requireAdmin as never, async (req: AuthRequest, res) => {
+  const id = String(req.params.id);
+  if (!isValidId(id)) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid ID" });
+    return;
+  }
+
+  const target = await db.select({ id: usersTable.id, username: usersTable.username })
+    .from(usersTable)
+    .where(eq(usersTable.id, id))
+    .limit(1);
+
+  if (!target.length) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
+    return;
+  }
+  if (isProtectedSystemUser(target[0])) {
+    res.status(403).json({ error: "Forbidden", message: "Cannot delete protected system user" });
+    return;
+  }
+
+  await hardDeleteUserData(id);
+  res.json({ message: "User deleted" });
 });
 
 router.get("/admin/kyc/pending", requireAdmin as never, async (req: AuthRequest, res) => {

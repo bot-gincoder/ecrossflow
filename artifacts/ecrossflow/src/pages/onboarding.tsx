@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useLocation } from "wouter";
 import { useAppStore, type Language, type Theme } from "@/hooks/use-store";
 import { useToast } from "@/hooks/use-toast";
+import { buildLocalizedPath, persistLocale } from "@/lib/i18n";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -9,6 +10,13 @@ const LANGUAGES: { value: Language; label: string; flag: string; nativeName: str
   { value: "fr", label: "French", flag: "🇫🇷", nativeName: "Français" },
   { value: "en", label: "English", flag: "🇬🇧", nativeName: "English" },
   { value: "es", label: "Spanish", flag: "🇪🇸", nativeName: "Español" },
+  { value: "pt", label: "Portuguese", flag: "🇵🇹", nativeName: "Português" },
+  { value: "de", label: "German", flag: "🇩🇪", nativeName: "Deutsch" },
+  { value: "it", label: "Italian", flag: "🇮🇹", nativeName: "Italiano" },
+  { value: "nl", label: "Dutch", flag: "🇳🇱", nativeName: "Nederlands" },
+  { value: "ar", label: "Arabic", flag: "🇸🇦", nativeName: "العربية" },
+  { value: "hi", label: "Hindi", flag: "🇮🇳", nativeName: "हिन्दी" },
+  { value: "zh", label: "Chinese", flag: "🇨🇳", nativeName: "中文" },
   { value: "ht", label: "Haitian Creole", flag: "🇭🇹", nativeName: "Kreyòl Ayisyen" },
 ];
 
@@ -40,6 +48,14 @@ export default function OnboardingPage() {
   const handleNext = () => {
     if (step === 1) {
       setLanguage(selectedLang);
+      persistLocale(selectedLang);
+      const next = buildLocalizedPath(
+        selectedLang,
+        window.location.pathname,
+        window.location.search,
+        window.location.hash,
+      );
+      window.history.replaceState({}, "", next);
     }
     if (step === 2) {
       setTheme(selectedTheme);

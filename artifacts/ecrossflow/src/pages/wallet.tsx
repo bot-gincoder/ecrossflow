@@ -20,20 +20,19 @@ const DEPOSIT_METHODS = [
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
   { value: 'CARD', label: 'Carte Bancaire', flag: '💳', currencies: ['USD', 'EUR'] },
-  { value: 'CRYPTO', label: 'Crypto (Polygon/BSC)', flag: '🪙', currencies: ['USD'] },
+  { value: 'CRYPTO', label: 'Crypto (USDC - Polygon)', flag: '🪙', currencies: ['USD'] },
 ];
 
 const WITHDRAW_METHODS = [
   { value: 'MONCASH', label: 'MonCash', flag: '🇭🇹' },
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹' },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦' },
-  { value: 'CRYPTO', label: 'Crypto (Polygon/BSC)', flag: '🪙' },
+  { value: 'CRYPTO', label: 'Crypto (USDC - Polygon)', flag: '🪙' },
 ];
 
 const CURRENCIES = ['USD', 'HTG', 'EUR', 'GBP', 'CAD', 'BTC', 'ETH', 'USDT', 'USDC', 'MATIC', 'BNB'];
 const APP_MIN_DEPOSIT_USD = 2;
 const APP_MIN_WITHDRAW_USD = 3;
-const NETWORK_SOFT_MIN_USD = 7;
 
 type Tab = 'deposit' | 'withdraw';
 
@@ -49,8 +48,7 @@ const BANK_COORDS = {
 };
 
 const CRYPTO_ASSETS = [
-  { value: 'MATIC_POLYGON', label: 'MATIC (POLYGON)', ticker: 'MATIC', network: 'POLYGON' },
-  { value: 'BNB_BSC', label: 'BNB (BSC)', ticker: 'BNB', network: 'BSC' },
+  { value: 'MATIC_POLYGON', label: 'USDC (Polygon)', ticker: 'USDC', network: 'POLYGON' },
 ] as const;
 
 type CryptoAssetValue = typeof CRYPTO_ASSETS[number]['value'];
@@ -237,9 +235,7 @@ function MethodInstructions({ method, currency, asset, instructions }: { method:
     const selectedAsset = CRYPTO_ASSETS.find(a => a.value === asset) || CRYPTO_ASSETS[0];
     return (
       <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-2xl p-4 space-y-3">
-        <div className="flex items-center gap-2 text-yellow-400 font-semibold text-sm">
-          🪙 Dépôt Crypto Custodial
-        </div>
+        <div className="flex items-center gap-2 text-yellow-400 font-semibold text-sm">🪙 Depot Crypto Circle</div>
         <div className="bg-card/60 rounded-xl p-4 space-y-2">
           <p className="text-sm text-muted-foreground">Réseau sélectionné: <span className="text-foreground font-semibold">{selectedAsset.label}</span></p>
           {!instructions ? (
@@ -262,7 +258,7 @@ function MethodInstructions({ method, currency, asset, instructions }: { method:
             </div>
           )}
         </div>
-        <p className="text-xs text-red-400 text-center">⚠️ Envoyez uniquement du {selectedAsset.ticker} sur le réseau {selectedAsset.network}.</p>
+        <p className="text-xs text-red-400 text-center">⚠️ Envoyer uniquement USDC sur le reseau Polygon. Tout autre envoi sera perdu.</p>
       </div>
     );
   }
@@ -497,6 +493,9 @@ function WalletInner() {
         setFormError(`Le montant minimum est ${APP_MIN_DEPOSIT_USD} USD.`);
         return false;
       }
+      if (paymentMethod === 'CRYPTO') {
+        setFormError('');
+      }
       setFormError('');
       return true;
     }
@@ -525,10 +524,10 @@ function WalletInner() {
     if (tab === 'deposit') {
       if (paymentMethod === 'CRYPTO' && circleEnabled) {
         if (!circleAddress) {
-          setFormError('Adresse Circle indisponible pour le reseau selectionne.');
+          setFormError('Adresse Circle indisponible pour USDC (Polygon).');
           return;
         }
-        setFormError('Adresse Circle prete. Envoyez les fonds puis attendez la confirmation on-chain.');
+        setFormError('Adresse Circle prete. Envoyer uniquement USDC sur Polygon. Tout autre envoi sera perdu.');
         return;
       }
       setDepositError('');
@@ -568,15 +567,15 @@ function WalletInner() {
   const currentDepositMethods = tab === 'withdraw' ? WITHDRAW_METHODS : DEPOSIT_METHODS;
   const selectedCryptoAsset = CRYPTO_ASSETS.find(a => a.value === cryptoAsset) || CRYPTO_ASSETS[0];
   const selectableCurrencies = paymentMethod === 'CRYPTO'
-    ? (tab === 'deposit' ? ['USD'] : [selectedCryptoAsset.ticker])
+    ? ['USD']
     : CURRENCIES;
 
   React.useEffect(() => {
     if (paymentMethod === 'CRYPTO') {
-      const requiredCurrency = tab === 'deposit' ? 'USD' : selectedCryptoAsset.ticker;
+      const requiredCurrency = 'USD';
       if (currency !== requiredCurrency) setCurrency(requiredCurrency);
     }
-  }, [paymentMethod, selectedCryptoAsset, currency, tab]);
+  }, [paymentMethod, currency]);
 
   React.useEffect(() => {
     setFormError('');
@@ -608,7 +607,8 @@ function WalletInner() {
         });
         const assetsPayload = await assetsRes.json();
         if (cancelled) return;
-        const assets = Array.isArray(assetsPayload?.assets) ? assetsPayload.assets as CircleAssetOption[] : [];
+        const assets = (Array.isArray(assetsPayload?.assets) ? assetsPayload.assets as CircleAssetOption[] : [])
+          .filter((opt) => String(opt.asset).toUpperCase() === 'USDC' && String(opt.network).toUpperCase() === 'POLYGON');
         setCircleAssets(assets);
         if (!circleSelected && assets.length) {
           setCircleSelected(`${assets[0].asset}:${assets[0].network}`);
@@ -779,7 +779,7 @@ function WalletInner() {
                   <label className="text-sm font-medium text-muted-foreground block mb-2">Reseau crypto</label>
                   {circleEnabled ? (
                     <div className="space-y-2">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="grid grid-cols-1 gap-2">
                         {circleAssets.map((opt) => {
                           const key = `${opt.asset}:${opt.network}`;
                           return (
@@ -791,7 +791,7 @@ function WalletInner() {
                                 circleSelected === key ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
                               }`}
                             >
-                              {opt.asset} ({opt.network})
+                              USDC (Polygon)
                             </button>
                           );
                         })}
@@ -808,24 +808,16 @@ function WalletInner() {
                           <p className="font-mono text-xs break-all text-foreground">{circleAddress}</p>
                         </div>
                       )}
+                      <p className="text-xs text-amber-300">
+                        Depot securise via USDC (Polygon uniquement). Nenvoyez pas dautres cryptos ou reseaux.
+                      </p>
                       {circleError && (
                         <p className="text-xs text-red-300">{circleError}</p>
                       )}
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {CRYPTO_ASSETS.map((asset) => (
-                        <button
-                          key={asset.value}
-                          type="button"
-                          onClick={() => { setCryptoAsset(asset.value); setCryptoInstructions(null); }}
-                          className={`px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
-                            cryptoAsset === asset.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground'
-                          }`}
-                        >
-                          {asset.label}
-                        </button>
-                      ))}
+                    <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-300">
+                      Circle est requis pour les depots USDC Polygon.
                     </div>
                   )}
                 </div>
@@ -937,10 +929,10 @@ function WalletInner() {
             </div>
             <div className="rounded-2xl border border-border bg-background/70 p-4 text-sm text-muted-foreground space-y-2">
               <p className="flex items-center gap-2 text-foreground font-semibold"><Sparkles className="w-4 h-4 text-primary" /> Guide automatique</p>
-              <p>Provider crypto actif: {circleEnabled ? 'Circle' : 'Fallback custodial'}</p>
+              <p>Provider crypto actif: Circle</p>
               <p>Minimum depot: ${APP_MIN_DEPOSIT_USD}. Minimum retrait: ${APP_MIN_WITHDRAW_USD}.</p>
               {paymentMethod === 'CRYPTO' && tab === 'deposit' && (
-                <p>Crypto: si le reseau refuse, commence a ${NETWORK_SOFT_MIN_USD} (minimum provider variable).</p>
+                <p>Envoyer uniquement USDC sur Polygon. Tout autre envoi sera perdu.</p>
               )}
               <p>Les retraits demandent OTP + KYC approuve.</p>
             </div>

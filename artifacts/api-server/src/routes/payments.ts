@@ -19,7 +19,7 @@ import {
   verifyOxaPayCallbackToken,
   verifyNowpaymentsSignature,
 } from "../services/crypto-provider.js";
-import { isCirclePrimary } from "../services/circle.js";
+import { getCircleAllowedAsset, getCircleAllowedNetwork, isCircleAllowedRail, isCirclePrimary } from "../services/circle.js";
 
 const router: IRouter = Router();
 let paymentsInfraReady = false;
@@ -532,6 +532,16 @@ router.post("/payments/webhook/circle", async (req, res) => {
       const amount = Number.parseFloat(amountRaw);
       const asset = String(notification.tokenSymbol || notification.asset || "USDC").toUpperCase();
       const network = String(notification.blockchain || notification.network || "").toUpperCase();
+      const allowedAsset = getCircleAllowedAsset();
+      const allowedNetwork = getCircleAllowedNetwork();
+      if (!isCircleAllowedRail(asset, network)) {
+        console.warn(`Rejected inbound Circle deposit ${asset}/${network}. Allowed ${allowedAsset}/${allowedNetwork}`);
+        await db.update(paymentEventsTable)
+          .set({ status: "IGNORED", error: `UNSUPPORTED_RAIL:${asset}:${network}`, processedAt: new Date() })
+          .where(eq(paymentEventsTable.id, inserted.id));
+        res.json({ ok: true, ignored: true, reason: "UNSUPPORTED_TOKEN_OR_NETWORK" });
+        return;
+      }
       if (circleWalletId && txHash && Number.isFinite(amount) && amount > 0 && statusRaw === "COMPLETE") {
         await db.transaction(async (tx) => {
           const wallets = await tx.select().from(userWalletsTable)

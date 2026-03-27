@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { db } from "@workspace/db";
 import { usersTable, walletsTable, referralsTable, notificationsTable, otpCodesTable } from "@workspace/db";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
-import { sendEmail, buildOtpEmail } from "../services/email.js";
+import { sendEmail, buildOtpEmail, buildEmailVerificationLinkEmailLocalized, buildAccountActivatedEmail } from "../services/email.js";
 import { OAuth2Client } from "google-auth-library";
 import { createHash } from "crypto";
 import { ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.js";
@@ -12,6 +13,11 @@ import { ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
   : null;
+const JWT_SECRET: string = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) throw new Error("JWT_SECRET environment variable must be set");
+  return secret;
+})();
 let otpInfraReady = false;
 let otpInfraPromise: Promise<void> | null = null;
 
@@ -92,6 +98,42 @@ function generateReferralCode(): string {
   return code;
 }
 
+function getPublicAppUrl(): string {
+  const raw = process.env.PUBLIC_APP_URL?.trim();
+  if (raw) return raw.replace(/\/$/, "");
+  const domain = process.env.DOMAIN?.trim();
+  if (domain) return `https://${domain.replace(/\/$/, "")}`;
+  return "https://ecrossflow.com";
+}
+
+function isTwilioConfigured(): boolean {
+  const sid = process.env.TWILIO_ACCOUNT_SID?.trim() || "";
+  const token = process.env.TWILIO_AUTH_TOKEN?.trim() || "";
+  const phone = normalizeE164Phone(process.env.TWILIO_PHONE?.trim() || "");
+  return Boolean(
+    /^AC[a-zA-Z0-9]{32}$/.test(sid) &&
+    token.length >= 16 &&
+    phone
+  );
+}
+
+function normalizeE164Phone(input?: string | null): string {
+  if (!input) return "";
+  const compact = input.replace(/[^\d+]/g, "");
+  if (!compact.startsWith("+")) return "";
+  const digits = compact.slice(1).replace(/\D/g, "");
+  if (digits.length < 8 || digits.length > 15) return "";
+  return `+${digits}`;
+}
+
+async function sendEmailVerificationLink(userId: string, role: string, email: string, preferredLanguage?: string): Promise<void> {
+  const verificationToken = signToken(userId, role, false);
+  const link = `${getPublicAppUrl()}/api/auth/confirm-email?token=${encodeURIComponent(verificationToken)}`;
+  await sendEmail(buildEmailVerificationLinkEmailLocalized(link, email, preferredLanguage)).catch(() => {
+    console.warn(`[EMAIL] Verification link delivery failed for ${email}`);
+  });
+}
+
 router.get("/auth/verify-referral", async (req, res) => {
   const { code } = req.query as { code: string };
   if (!code) {
@@ -152,10 +194,11 @@ router.post("/auth/google", async (req, res) => {
     return;
   }
 
-  const { accessToken, referralCode, phone } = req.body as {
+  const { accessToken, referralCode, phone, preferredLanguage } = req.body as {
     accessToken?: string;
     referralCode?: string;
     phone?: string;
+    preferredLanguage?: string;
   };
 
   if (!accessToken) {
@@ -208,6 +251,17 @@ router.post("/auth/google", async (req, res) => {
         .where(eq(usersTable.id, user.id));
     }
 
+    if (user.status === "PENDING") {
+      await sendEmailVerificationLink(user.id, user.role, user.email, user.preferredLanguage);
+      res.status(403).json({
+        error: "Forbidden",
+        code: "EMAIL_NOT_VERIFIED",
+        email: user.email,
+        message: "Email not verified. A confirmation link has been sent.",
+      });
+      return;
+    }
+
     const token = signToken(user.id, user.role, true);
     res.json({
       token,
@@ -254,6 +308,18 @@ router.post("/auth/google", async (req, res) => {
     return;
   }
 
+  const PLATFORM_CODE = (process.env.PLATFORM_REF_CODE || "ECFSTART").toUpperCase();
+  if (referralCode.toUpperCase() === PLATFORM_CODE) {
+    const existingReferrals = await db.select({ id: referralsTable.id })
+      .from(referralsTable)
+      .where(eq(referralsTable.referrerId, referrer[0].id))
+      .limit(1);
+    if (existingReferrals.length > 0) {
+      res.status(400).json({ error: "Bad Request", message: "Ce code de démarrage a déjà été utilisé. Demandez le code de parrainage d'un membre actif." });
+      return;
+    }
+  }
+
   const firstName = given_name || (name ? name.split(" ")[0] : "") || "User";
   const lastName = family_name || (name ? name.split(" ").slice(1).join(" ") : "") || "";
 
@@ -295,10 +361,9 @@ router.post("/auth/google", async (req, res) => {
       avatarUrl: picture || null,
       referralCode: uniqueCode,
       referredBy: referrer[0].id,
-      preferredLanguage: "fr",
-      status: "ACTIVE",
+      preferredLanguage: preferredLanguage || "fr",
+      status: "PENDING",
       role: "USER",
-      activatedAt: new Date(),
     }).returning();
 
     await tx.insert(walletsTable).values({
@@ -327,29 +392,62 @@ router.post("/auth/google", async (req, res) => {
     return createdUser;
   });
 
-  const token = signToken(newUser.id, newUser.role, true);
-
+  await sendEmailVerificationLink(newUser.id, newUser.role, newUser.email, newUser.preferredLanguage);
   res.status(201).json({
-    token,
-    user: {
-      id: newUser.id,
-      accountNumber: newUser.accountNumber,
-      firstName: newUser.firstName,
-      lastName: newUser.lastName,
-      username: newUser.username,
-      email: newUser.email,
-      phone: newUser.phone,
-      avatarUrl: newUser.avatarUrl,
-      referralCode: newUser.referralCode,
-      status: newUser.status,
-      role: newUser.role,
-      preferredLanguage: newUser.preferredLanguage,
-      preferredCurrency: newUser.preferredCurrency,
-      preferredTheme: newUser.preferredTheme,
-      currentBoard: newUser.currentBoard,
-      createdAt: newUser.createdAt,
-    },
+    code: "EMAIL_NOT_VERIFIED",
+    email: newUser.email,
+    message: "Compte créé. Un lien de confirmation a été envoyé sur votre email Google.",
   });
+});
+
+router.get("/auth/confirm-email", async (req, res) => {
+  const token = String(req.query?.token || "");
+  const defaultLocale = (process.env.DEFAULT_LOCALE || "fr").toLowerCase();
+  const baseUrl = getPublicAppUrl();
+  const loginUrl = `${baseUrl}/${defaultLocale}/auth/login`;
+
+  if (!token) {
+    res.redirect(`${loginUrl}?verified=missing_token`);
+    return;
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { userId?: string };
+    const userId = decoded?.userId;
+    if (!userId) {
+      res.redirect(`${loginUrl}?verified=invalid_token`);
+      return;
+    }
+
+    const users = await db.select({
+      id: usersTable.id,
+      email: usersTable.email,
+      preferredLanguage: usersTable.preferredLanguage,
+    })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId))
+      .limit(1);
+    if (!users.length) {
+      res.redirect(`${loginUrl}?verified=user_not_found`);
+      return;
+    }
+    const user = users[0];
+    const userLocale = (user.preferredLanguage || defaultLocale).toLowerCase();
+    const userLoginUrl = `${baseUrl}/${userLocale}/auth/login`;
+
+    const now = new Date();
+    await db.update(usersTable)
+      .set({ status: "ACTIVE", activatedAt: now })
+      .where(eq(usersTable.id, userId));
+
+    await sendEmail(buildAccountActivatedEmail(user.email, user.preferredLanguage)).catch(() => {
+      console.warn(`[EMAIL] Activation success email failed for ${user.email}`);
+    });
+
+    res.redirect(`${userLoginUrl}?verified=success`);
+  } catch {
+    res.redirect(`${loginUrl}?verified=invalid_or_expired`);
+  }
 });
 
 router.post("/auth/register", async (req, res) => {
@@ -562,6 +660,36 @@ router.post("/auth/logout", requireAuth as never, (req, res) => {
   res.json({ message: "Logged out successfully" });
 });
 
+router.get("/auth/otp-delivery-options", requireAuth as never, async (req, res) => {
+  const authReq = req as AuthRequest;
+  if (!authReq.userId) {
+    res.status(401).json({ error: "Unauthorized", message: "Not authenticated" });
+    return;
+  }
+
+  const rows = await db.select({ phone: usersTable.phone })
+    .from(usersTable)
+    .where(eq(usersTable.id, authReq.userId))
+    .limit(1);
+
+  if (!rows.length) {
+    res.status(404).json({ error: "Not Found", message: "User not found" });
+    return;
+  }
+
+  const phone = normalizeE164Phone(rows[0].phone);
+  const twilioReady = isTwilioConfigured();
+  const smsAvailable = twilioReady && Boolean(phone);
+  res.json({
+    methods: {
+      email: { available: true },
+      sms: { available: smsAvailable },
+      whatsapp: { available: false },
+    },
+    phonePresent: Boolean(phone),
+  });
+});
+
 router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
   const authReq = req as AuthRequest;
 
@@ -582,21 +710,25 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
 
   const { email, phone } = users[0];
   const method = (req.body?.method as string) || "email";
+  if (method === "whatsapp") {
+    res.status(400).json({ error: "Bad Request", message: "WhatsApp OTP is currently disabled" });
+    return;
+  }
   const otp = generateOtp();
   await saveOtpCode(authReq.userId, otp);
 
-  if (method === "sms" || method === "whatsapp") {
-    const hasTwilio = process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE;
+  if (method === "sms") {
+    const hasTwilio = isTwilioConfigured();
     if (hasTwilio) {
       try {
         const accountSid = process.env.TWILIO_ACCOUNT_SID!;
         const authToken = process.env.TWILIO_AUTH_TOKEN!;
-        const fromPhone = process.env.TWILIO_PHONE!;
-        const toPhone = phone || "";
+        const fromPhone = normalizeE164Phone(process.env.TWILIO_PHONE!);
+        const toPhone = normalizeE164Phone(phone);
         if (toPhone) {
           const body = `Votre code Ecrossflow : ${otp}. Valable 10 minutes.`;
-          const twilioTo = method === "whatsapp" ? `whatsapp:${toPhone}` : toPhone;
-          const twilioFrom = method === "whatsapp" ? `whatsapp:${fromPhone}` : fromPhone;
+          const twilioTo = toPhone;
+          const twilioFrom = fromPhone;
           const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
             method: "POST",
             headers: {
@@ -605,7 +737,10 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
             },
             body: new URLSearchParams({ To: twilioTo, From: twilioFrom, Body: body }).toString(),
           });
-          if (!resp.ok) throw new Error("Twilio error");
+          if (!resp.ok) {
+            const raw = await resp.text();
+            throw new Error(`Twilio error ${resp.status}: ${raw.slice(0, 300)}`);
+          }
           console.log(`[OTP] ${method.toUpperCase()} sent to ${toPhone}`);
           res.json({ message: "OTP sent", method, email });
           return;
@@ -634,7 +769,11 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
     return;
   }
 
-  const users = await db.select({ id: usersTable.id, email: usersTable.email })
+  const users = await db.select({
+    id: usersTable.id,
+    email: usersTable.email,
+    preferredLanguage: usersTable.preferredLanguage,
+  })
     .from(usersTable)
     .where(eq(usersTable.id, authReq.userId))
     .limit(1);
@@ -730,6 +869,10 @@ router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
     await tx.update(usersTable)
       .set({ status: "ACTIVE", activatedAt: now })
       .where(eq(usersTable.id, authReq.userId!));
+  });
+
+  await sendEmail(buildAccountActivatedEmail(users[0].email, users[0].preferredLanguage)).catch(() => {
+    console.warn(`[EMAIL] Activation success email failed for ${users[0].email}`);
   });
 
   res.json({ message: "Email verified successfully" });

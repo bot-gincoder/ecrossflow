@@ -94,7 +94,7 @@ export default function Dashboard() {
                 <h4 className="text-xl font-bold mb-1">Board {currentBoard.boardId}</h4>
                 <p className="text-sm text-muted-foreground mb-6">You are progressing well. Invite more friends to accelerate completion.</p>
                 <Link href="/boards" className="w-full py-3 rounded-xl bg-secondary text-secondary-foreground font-semibold hover:bg-secondary/80 transition-colors text-sm">
-                  View Pyramid
+                  View Level Details
                 </Link>
               </div>
             ) : (

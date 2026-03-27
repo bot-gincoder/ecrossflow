@@ -30,6 +30,7 @@ import {
   resolveCryptoAsset,
 } from "../services/crypto-provider.js";
 import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
+import { isCirclePrimary } from "../services/circle.js";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
@@ -256,6 +257,13 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
   let resolvedCryptoAsset: ReturnType<typeof resolveCryptoAsset> = null;
   if (paymentMethodNormalized === "CRYPTO") {
+    if (isCirclePrimary()) {
+      res.status(400).json({
+        error: "Bad Request",
+        message: "Crypto deposit is restricted to USDC on Polygon via Circle. Use /api/wallet/circle/address.",
+      });
+      return;
+    }
     if (!isCryptoDepositConfigured()) {
       res.status(503).json({
         error: "Service Unavailable",
@@ -854,6 +862,13 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
 
   let resolvedCryptoAsset: ReturnType<typeof resolveCryptoAsset> = null;
   if (paymentMethodNormalized === "CRYPTO") {
+    if (isCirclePrimary()) {
+      res.status(400).json({
+        error: "Bad Request",
+        message: "Crypto withdrawal is restricted to USDC on Polygon via Circle. Use /api/wallet/circle/withdraw.",
+      });
+      return;
+    }
     resolvedCryptoAsset = resolveCryptoAsset(cryptoAsset, currency);
     if (!resolvedCryptoAsset) {
       res.status(400).json({

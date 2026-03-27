@@ -5,6 +5,7 @@ import { useGetMe, useUpdateSettings } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useAppStore, type Theme, type Language } from '@/hooks/use-store';
 import { useQueryClient } from '@tanstack/react-query';
+import { buildLocalizedPath, persistLocale } from '@/lib/i18n';
 
 export default function ProfilePage() {
   const { data: user } = useGetMe();
@@ -17,6 +18,18 @@ export default function ProfilePage() {
 
   const handleSaveSettings = () => {
     updateSettings({ data: { preferredLanguage: language, preferredTheme: theme } });
+  };
+
+  const changeLanguage = (nextLanguage: Language) => {
+    setLanguage(nextLanguage);
+    persistLocale(nextLanguage);
+    const next = buildLocalizedPath(
+      nextLanguage,
+      window.location.pathname,
+      window.location.search,
+      window.location.hash,
+    );
+    window.location.assign(next);
   };
 
   return (
@@ -112,7 +125,7 @@ export default function ProfilePage() {
                 ] satisfies { value: Language; label: string; flag: string }[]).map(l => (
                   <button
                     key={l.value}
-                    onClick={() => setLanguage(l.value)}
+                    onClick={() => changeLanguage(l.value)}
                     className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition-all ${language === l.value ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-muted'}`}
                   >
                     <span>{l.flag}</span> {l.label}

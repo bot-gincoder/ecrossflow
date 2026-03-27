@@ -34,6 +34,56 @@ type InstanceRow = {
   instanceNumber: number;
 };
 
+async function assignInvestorQueueNumberIfNeeded(
+  tx: TxClient,
+  userId: string,
+  boardId: string,
+): Promise<void> {
+  if (boardId !== "F") return;
+
+  const users = await tx.select({
+    id: usersTable.id,
+    username: usersTable.username,
+    accountNumber: usersTable.accountNumber,
+  })
+    .from(usersTable)
+    .where(eq(usersTable.id, userId))
+    .for("update")
+    .limit(1);
+  if (!users.length) return;
+  const user = users[0];
+  if (user.accountNumber) return;
+
+  const isCeo = user.username.toLowerCase() === "ceo";
+  if (isCeo) {
+    const ownerOfOne = await tx.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.accountNumber, 1))
+      .limit(1);
+    if (!ownerOfOne.length || ownerOfOne[0].id === user.id) {
+      await tx.update(usersTable)
+        .set({ accountNumber: 1 })
+        .where(eq(usersTable.id, user.id));
+      return;
+    }
+  }
+
+  await tx.execute(sql`CREATE SEQUENCE IF NOT EXISTS investor_queue_seq START 2 INCREMENT 1 MINVALUE 2;`);
+  await tx.execute(sql`
+    SELECT setval(
+      'investor_queue_seq',
+      GREATEST(COALESCE((SELECT MAX(account_number) FROM users), 1) + 1, 2),
+      false
+    );
+  `);
+  const next = await tx.execute(sql<{ next_value: number }>`SELECT nextval('investor_queue_seq')::int AS next_value;`);
+  const nextValue = next.rows?.[0]?.next_value ?? 2;
+
+  await tx.update(usersTable)
+    .set({ accountNumber: nextValue })
+    .where(eq(usersTable.id, user.id));
+}
+
 async function completeBoardInstance(tx: TxClient, boardId: string, instance: InstanceRow, boardData: BoardRow): Promise<void> {
   await tx.update(boardInstancesTable)
     .set({ status: "COMPLETED", completedAt: new Date() })
@@ -316,9 +366,16 @@ router.get("/boards", requireAuth as never, async (req: AuthRequest, res) => {
 router.get("/boards/my-status", requireAuth as never, async (req: AuthRequest, res) => {
   const boards = await db.select().from(boardsTable).orderBy(asc(boardsTable.rankOrder));
   const statuses = [];
+  const roleRank = (role: string | null | undefined): number => {
+    const value = String(role || "").toUpperCase();
+    if (value === "RANKER") return 4;
+    if (value === "LEADER") return 3;
+    if (value === "CHALLENGER") return 2;
+    if (value === "STARTER") return 1;
+    return 0;
+  };
 
   for (const board of boards) {
-    // Prefer active/waiting instances over completed; within same status prefer most recent
     const participation = await db.select({
       id: boardParticipantsTable.id,
       role: boardParticipantsTable.role,
@@ -339,17 +396,25 @@ router.get("/boards/my-status", requireAuth as never, async (req: AuthRequest, r
     if (!participation.length) {
       statuses.push({ boardId: board.id, completed: false, role: null, instanceId: null, amountPaid: null, joinedAt: null });
     } else {
-      // Prefer active instance participation, then waiting, then completed
-      const active = participation.find(p => p.instanceStatus === "ACTIVE");
-      const waiting = participation.find(p => p.instanceStatus === "WAITING");
-      const p = active ?? waiting ?? participation[0];
+      // Compute the user's real current stage in this level:
+      // prefer non-completed participations and pick the highest stage, then most recent.
+      const nonCompleted = participation.filter((p) => p.instanceStatus !== "COMPLETED");
+      const pool = nonCompleted.length ? nonCompleted : participation;
+      const sorted = [...pool].sort((a, b) => {
+        const roleDelta = roleRank(b.role) - roleRank(a.role);
+        if (roleDelta !== 0) return roleDelta;
+        const ta = a.paidAt ? new Date(a.paidAt).getTime() : 0;
+        const tb = b.paidAt ? new Date(b.paidAt).getTime() : 0;
+        return tb - ta;
+      });
+      const p = sorted[0];
       statuses.push({
         boardId: board.id,
         role: p.role,
         instanceId: p.boardInstanceId,
         amountPaid: p.amountPaid ? parseFloat(p.amountPaid) : null,
         joinedAt: p.paidAt,
-        completed: p.instanceStatus === "COMPLETED",
+        completed: p.instanceStatus === "COMPLETED" && nonCompleted.length === 0,
       });
     }
   }
@@ -584,6 +649,9 @@ router.post("/boards/:boardId/pay", requireAuth as never, async (req: AuthReques
       await tx.update(boardInstancesTable)
         .set({ slotsFilled: newStarterCount, totalCollected: newTotalCollected.toFixed(2) })
         .where(eq(boardInstancesTable.id, instance.id));
+
+      // Assign sequential investor queue number when user validates first board F payment.
+      await assignInvestorQueueNumberIfNeeded(tx, req.userId!, boardId);
 
       const boardCompleted = newStarterCount >= 8;
 

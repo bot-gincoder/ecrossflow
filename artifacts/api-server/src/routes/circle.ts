@@ -15,6 +15,9 @@ import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewar
 import {
   createCircleTransfer,
   createCircleWallet,
+  getCircleAllowedAsset,
+  getCircleAllowedNetwork,
+  isCircleAllowedRail,
   isCircleConfigured,
   isCirclePrimary,
   listCircleSupportedAssets,
@@ -108,9 +111,13 @@ router.get("/wallet/circle/assets", requireAuth as never, async (_req: AuthReque
 router.get("/wallet/circle/address", requireAuth as never, async (req: AuthRequest, res) => {
   await ensureLedgerInfra();
   const userId = req.userId!;
-  const network = String((req.query.network as string) || "").trim().toUpperCase();
-  if (!network) {
-    res.status(400).json({ error: "Bad Request", message: "network query param is required" });
+  const allowedNetwork = getCircleAllowedNetwork();
+  const networkQuery = String((req.query.network as string) || allowedNetwork).trim().toUpperCase();
+  if (networkQuery && networkQuery !== allowedNetwork) {
+    res.status(400).json({
+      error: "Bad Request",
+      message: `Only ${allowedNetwork} network is allowed for crypto deposits`,
+    });
     return;
   }
   await ensureWalletAndLedgerAccounts(db, userId, "USD");
@@ -121,7 +128,7 @@ router.get("/wallet/circle/address", requireAuth as never, async (req: AuthReque
   }
 
   try {
-    const wallet = await ensureUserCircleWallet(userId, network);
+    const wallet = await ensureUserCircleWallet(userId, allowedNetwork);
     await syncInternalBalances(userId);
     res.json({
       walletId: wallet.id,
@@ -168,6 +175,15 @@ router.post("/wallet/circle/withdraw", requireAuth as never, async (req: AuthReq
     res.status(400).json({ error: "Bad Request", message: "destinationAddress, amountUsd, asset, network are required" });
     return;
   }
+  const allowedAsset = getCircleAllowedAsset();
+  const allowedNetwork = getCircleAllowedNetwork();
+  if (!isCircleAllowedRail(String(asset), String(network))) {
+    res.status(400).json({
+      error: "Bad Request",
+      message: `Only ${allowedAsset} on ${allowedNetwork} is supported`,
+    });
+    return;
+  }
   const amount = Number(amountUsd);
   if (!Number.isFinite(amount) || amount <= 0) {
     res.status(400).json({ error: "Bad Request", message: "amountUsd must be a positive number" });
@@ -194,7 +210,7 @@ router.post("/wallet/circle/withdraw", requireAuth as never, async (req: AuthReq
     return;
   }
 
-  const sourceWallet = await ensureUserCircleWallet(userId, String(network).toUpperCase());
+  const sourceWallet = await ensureUserCircleWallet(userId, allowedNetwork);
   const reference = `CIR-WDR-${randomUUID()}`;
 
   const result = await db.transaction(async (tx) => {

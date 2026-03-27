@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { constants, publicEncrypt, randomUUID } from "crypto";
 
 type JsonObject = Record<string, unknown>;
 
@@ -9,18 +9,10 @@ export type CircleAsset = {
 };
 
 const DEFAULT_CIRCLE_BASE = "https://api.circle.com";
-
-// Commonly used Circle-supported rails for wallet UX.
+const CIRCLE_USDC_ASSET = "USDC";
+const CIRCLE_POLYGON_NETWORK = "POLYGON";
 const CIRCLE_ASSETS: CircleAsset[] = [
-  { asset: "USDC", network: "ETH-SEPOLIA", blockchain: "ETH-SEPOLIA" },
-  { asset: "USDC", network: "AVAX-FUJI", blockchain: "AVAX-FUJI" },
-  { asset: "USDC", network: "MATIC-AMOY", blockchain: "MATIC-AMOY" },
-  { asset: "USDC", network: "ARB-SEPOLIA", blockchain: "ARB-SEPOLIA" },
-  { asset: "USDC", network: "OP-SEPOLIA", blockchain: "OP-SEPOLIA" },
-  { asset: "USDC", network: "BASE-SEPOLIA", blockchain: "BASE-SEPOLIA" },
-  { asset: "USDC", network: "SOL-DEVNET", blockchain: "SOL-DEVNET" },
-  { asset: "EURC", network: "ETH-SEPOLIA", blockchain: "ETH-SEPOLIA" },
-  { asset: "EURC", network: "BASE-SEPOLIA", blockchain: "BASE-SEPOLIA" },
+  { asset: CIRCLE_USDC_ASSET, network: CIRCLE_POLYGON_NETWORK, blockchain: CIRCLE_POLYGON_NETWORK },
 ];
 
 function env(key: string): string {
@@ -50,12 +42,16 @@ function getEntitySecretCiphertext(): string {
   return env("CIRCLE_ENTITY_SECRET_CIPHERTEXT");
 }
 
+function getEntitySecret(): string {
+  return env("CIRCLE_ENTITY_SECRET");
+}
+
 function getDefaultBlockchain(): string {
-  return env("CIRCLE_DEFAULT_BLOCKCHAIN") || "MATIC-AMOY";
+  return env("CIRCLE_DEFAULT_BLOCKCHAIN") || CIRCLE_POLYGON_NETWORK;
 }
 
 export function isCircleConfigured(): boolean {
-  return Boolean(getApiKey() && getWalletSetId() && getEntitySecretCiphertext());
+  return Boolean(getApiKey() && getWalletSetId() && (getEntitySecretCiphertext() || getEntitySecret()));
 }
 
 export function isCirclePrimary(): boolean {
@@ -63,14 +59,19 @@ export function isCirclePrimary(): boolean {
 }
 
 export function listCircleSupportedAssets(): CircleAsset[] {
-  const raw = env("CIRCLE_SUPPORTED_ASSETS_JSON");
-  if (!raw) return CIRCLE_ASSETS;
-  try {
-    const parsed = JSON.parse(raw) as CircleAsset[];
-    return Array.isArray(parsed) && parsed.length ? parsed : CIRCLE_ASSETS;
-  } catch {
-    return CIRCLE_ASSETS;
-  }
+  return CIRCLE_ASSETS;
+}
+
+export function getCircleAllowedAsset(): string {
+  return CIRCLE_USDC_ASSET;
+}
+
+export function getCircleAllowedNetwork(): string {
+  return CIRCLE_POLYGON_NETWORK;
+}
+
+export function isCircleAllowedRail(asset: string, network: string): boolean {
+  return asset.trim().toUpperCase() === CIRCLE_USDC_ASSET && network.trim().toUpperCase() === CIRCLE_POLYGON_NETWORK;
 }
 
 async function circleRequest(args: {
@@ -103,12 +104,39 @@ async function circleRequest(args: {
   return { status: res.status, data };
 }
 
+let cachedCirclePublicKey: string | null = null;
+
+async function resolveEntitySecretCiphertext(): Promise<string> {
+  const configuredCipher = getEntitySecretCiphertext();
+  if (configuredCipher) return configuredCipher;
+  const entitySecret = getEntitySecret();
+  if (!entitySecret) throw new Error("CIRCLE_ENTITY_SECRET_MISSING");
+  if (!/^[a-fA-F0-9]{64}$/.test(entitySecret)) throw new Error("CIRCLE_ENTITY_SECRET_INVALID_FORMAT");
+
+  if (!cachedCirclePublicKey) {
+    const response = await circleRequest({ method: "GET", path: "/v1/w3s/config/entity/publicKey" });
+    const data = (response.data.data && typeof response.data.data === "object")
+      ? response.data.data as JsonObject
+      : response.data;
+    const publicKey = String(data.publicKey || "").trim();
+    if (!publicKey) throw new Error("CIRCLE_PUBLIC_KEY_MISSING");
+    cachedCirclePublicKey = publicKey;
+  }
+
+  const encrypted = publicEncrypt({
+    key: cachedCirclePublicKey,
+    padding: constants.RSA_PKCS1_OAEP_PADDING,
+    oaepHash: "sha256",
+  }, Buffer.from(entitySecret, "hex"));
+  return encrypted.toString("base64");
+}
+
 export async function createCircleWallet(args: {
   idempotencyKey?: string;
   blockchain?: string;
 }): Promise<{ circleWalletId: string; address: string; network: string; raw: JsonObject }> {
   const walletSetId = getWalletSetId();
-  const entitySecretCiphertext = getEntitySecretCiphertext();
+  const entitySecretCiphertext = await resolveEntitySecretCiphertext();
   if (!walletSetId || !entitySecretCiphertext) throw new Error("CIRCLE_NOT_CONFIGURED");
 
   const blockchain = args.blockchain || getDefaultBlockchain();
@@ -149,7 +177,7 @@ export async function createCircleTransfer(args: {
   tokenId: string;
   idempotencyKey?: string;
 }): Promise<{ transferId: string; state: string; raw: JsonObject }> {
-  const entitySecretCiphertext = getEntitySecretCiphertext();
+  const entitySecretCiphertext = await resolveEntitySecretCiphertext();
   if (!entitySecretCiphertext) throw new Error("CIRCLE_NOT_CONFIGURED");
 
   const body: JsonObject = {
@@ -180,13 +208,14 @@ export async function createCircleTransfer(args: {
 }
 
 export function resolveCircleTokenId(asset: string, network: string): string | null {
+  if (!isCircleAllowedRail(asset, network)) return null;
   const rawMap = env("CIRCLE_TOKEN_ID_MAP_JSON");
-  if (!rawMap) return null;
+  if (!rawMap) return env("CIRCLE_USDC_POLYGON_TOKEN_ID") || null;
   try {
     const map = JSON.parse(rawMap) as Record<string, string>;
-    const key = `${asset.toUpperCase()}:${network.toUpperCase()}`;
-    return map[key] || null;
+    const key = `${CIRCLE_USDC_ASSET}:${CIRCLE_POLYGON_NETWORK}`;
+    return map[key] || env("CIRCLE_USDC_POLYGON_TOKEN_ID") || null;
   } catch {
-    return null;
+    return env("CIRCLE_USDC_POLYGON_TOKEN_ID") || null;
   }
 }

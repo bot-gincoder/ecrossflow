@@ -3,13 +3,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { setBaseUrl, setAuthTokenGetter } from "@workspace/api-client-react";
-import { useAppStore } from "@/hooks/use-store";
+import { BASE_FR_TRANSLATIONS, useAppStore } from "@/hooks/use-store";
+import {
+  buildLocalizedPath,
+  DEFAULT_LOCALE,
+  detectBrowserLocale,
+  extractLocaleFromPath,
+  fetchI18nBundle,
+  INITIAL_ENABLED_LOCALES,
+  normalizeLocale,
+  persistLocale,
+  RTL_LOCALES,
+} from "@/lib/i18n";
+import { startRuntimeTranslation, stopRuntimeTranslation } from "@/lib/runtime-i18n";
 
 import Landing from "@/pages/landing";
 import AuthPage from "@/pages/auth";
 import VerifyEmailPage from "@/pages/verify-email";
+import GoogleCheckEmailPage from "@/pages/google-check-email";
 import OnboardingPage from "@/pages/onboarding";
 import Dashboard from "@/pages/dashboard";
 import Boards from "@/pages/boards";
@@ -36,34 +49,103 @@ const queryClient = new QueryClient({
 });
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_ID_RE = /^[a-zA-Z0-9-]+\.apps\.googleusercontent\.com$/;
+const IS_GOOGLE_CLIENT_ID_VALID = GOOGLE_CLIENT_ID_RE.test(GOOGLE_CLIENT_ID);
+
+if (typeof window !== "undefined") {
+  setBaseUrl(window.location.origin);
+  setAuthTokenGetter(() => {
+    return (
+      localStorage.getItem("ecrossflow_token") ||
+      useAppStore.getState().token ||
+      ""
+    );
+  });
+}
 
 function RedirectTo({ to }: { to: string }) {
   const [, navigate] = useLocation();
-  useEffect(() => { navigate(to); }, [to]);
+  useEffect(() => { navigate(to); }, [to, navigate]);
   return null;
 }
 
-function AppSetup({ children }: { children: React.ReactNode }) {
-  const { theme } = useAppStore();
-
-  useEffect(() => {
-    const apiUrl = `${window.location.origin}`;
-    setBaseUrl(apiUrl);
-    setAuthTokenGetter(() => {
-      return (
-        localStorage.getItem('ecrossflow_token') ||
-        useAppStore.getState().token ||
-        ''
-      );
-    });
-  }, []);
+function AppSetup({ children, locale }: { children: React.ReactNode; locale: string }) {
+  const { theme, setLanguage, setRemoteMessages } = useAppStore();
 
   useEffect(() => {
     const root = document.documentElement;
-    root.classList.remove('light', 'dark', 'midnight', 'gold');
-    if (theme !== 'light') root.classList.add(theme);
-    else root.classList.add('light');
+    root.classList.remove("light", "dark", "midnight", "gold");
+    if (theme !== "light") root.classList.add(theme);
+    else root.classList.add("light");
   }, [theme]);
+
+  useEffect(() => {
+    setLanguage(locale);
+    persistLocale(locale);
+    document.documentElement.lang = locale;
+    document.documentElement.dir = RTL_LOCALES.has(locale) ? "rtl" : "ltr";
+  }, [locale, setLanguage]);
+
+  useEffect(() => {
+    const origin = window.location.origin;
+    const canonicalHref = `${origin}${window.location.pathname}${window.location.search}`;
+    let canonical = document.querySelector<HTMLLinkElement>("link[rel='canonical']");
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.rel = "canonical";
+      document.head.appendChild(canonical);
+    }
+    canonical.href = canonicalHref;
+
+    document.querySelectorAll("link[data-i18n-hreflang='true']").forEach((node) => node.remove());
+    for (const code of INITIAL_ENABLED_LOCALES) {
+      const href = buildLocalizedPath(code, window.location.pathname, window.location.search, window.location.hash);
+      const alt = document.createElement("link");
+      alt.rel = "alternate";
+      alt.hreflang = code;
+      alt.href = `${origin}${href}`;
+      alt.dataset.i18nHreflang = "true";
+      document.head.appendChild(alt);
+    }
+  }, [locale]);
+
+  useEffect(() => {
+    let active = true;
+    const loadBundle = async () => {
+      try {
+        const syncKey = "ecrossflow_i18n_synced_v1";
+        if (!localStorage.getItem(syncKey)) {
+          const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+          const items = Object.entries(BASE_FR_TRANSLATIONS).map(([key, sourceText]) => {
+            const split = key.split(".");
+            const namespace = split.length > 1 ? split[0]! : "common";
+            const normalizedKey = split.length > 1 ? split.slice(1).join(".") : key;
+            return { namespace, key: normalizedKey, sourceText };
+          });
+          await fetch(`${base}/api/i18n/sync-keys`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ items }),
+          });
+          localStorage.setItem(syncKey, "1");
+        }
+
+        const messages = await fetchI18nBundle(locale, ["common"]);
+        if (!active) return;
+        setRemoteMessages(messages);
+      } catch {
+        if (!active) return;
+        setRemoteMessages({});
+      }
+    };
+    void loadBundle();
+    return () => { active = false; };
+  }, [locale, setRemoteMessages]);
+
+  useEffect(() => {
+    void startRuntimeTranslation(locale);
+    return () => { stopRuntimeTranslation(); };
+  }, [locale]);
 
   return <>{children}</>;
 }
@@ -75,6 +157,7 @@ function Router() {
       <Route path="/auth/login" component={AuthPage} />
       <Route path="/auth/register" component={AuthPage} />
       <Route path="/auth/verify-email" component={VerifyEmailPage} />
+      <Route path="/auth/check-email" component={GoogleCheckEmailPage} />
       <Route path="/onboarding" component={OnboardingPage} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/boards" component={Boards} />
@@ -99,12 +182,12 @@ function Router() {
   );
 }
 
-function AppContent() {
+function AppContent({ locale }: { locale: string }) {
   return (
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
-          <AppSetup>
+        <WouterRouter base={`${import.meta.env.BASE_URL.replace(/\/$/, "")}/${locale}`}>
+          <AppSetup locale={locale}>
             <Router />
           </AppSetup>
         </WouterRouter>
@@ -115,14 +198,26 @@ function AppContent() {
 }
 
 function App() {
-  if (GOOGLE_CLIENT_ID) {
+  const locale = useMemo(() => {
+    if (typeof window === "undefined") return DEFAULT_LOCALE;
+    const path = window.location.pathname || "/";
+    const extracted = extractLocaleFromPath(path);
+    if (extracted.locale) return normalizeLocale(extracted.locale);
+
+    const detected = detectBrowserLocale();
+    const nextUrl = buildLocalizedPath(detected, path, window.location.search, window.location.hash);
+    window.history.replaceState({}, "", nextUrl);
+    return detected;
+  }, []);
+
+  if (IS_GOOGLE_CLIENT_ID_VALID) {
     return (
       <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
-        <AppContent />
+        <AppContent locale={locale} />
       </GoogleOAuthProvider>
     );
   }
-  return <AppContent />;
+  return <AppContent locale={locale} />;
 }
 
 export default App;

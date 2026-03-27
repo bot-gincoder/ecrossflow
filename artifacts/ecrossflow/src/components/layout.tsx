@@ -3,12 +3,14 @@ import { Link, useLocation } from 'wouter';
 import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, Wallet, Layers, History, Users, 
-  User, Bell, Settings, LogOut, Menu, X, ShieldAlert,
+  User, Bell, LogOut, Menu, X, ShieldAlert,
   CreditCard, BarChart
 } from 'lucide-react';
 import { useAppStore } from '@/hooks/use-store';
 import type { Theme, Language } from '@/hooks/use-store';
 import { useGetMe, useLogout, getGetMeQueryKey, useGetUnreadCount } from '@workspace/api-client-react';
+import { PRIMARY_LANGUAGE_OPTIONS, EXTENDED_LANGUAGE_OPTIONS } from '@/lib/languages';
+import { buildLocalizedPath, fetchLanguagesFromBackend, persistLocale } from '@/lib/i18n';
 
 const NavLink = ({ href, icon: Icon, children, currentPath }: { href: string, icon: React.ElementType, children: ReactNode, currentPath: string }) => {
   const isActive = currentPath === href || (href !== '/' && currentPath.startsWith(href));
@@ -40,8 +42,9 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   const [location, setLocation] = useLocation();
   const { token, logout, t, theme, setTheme, language, setLanguage } = useAppStore();
   const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
+  const [dynamicLanguages, setDynamicLanguages] = React.useState<Array<{ code: string; nativeLabel: string }>>([]);
   
-  const { data: user, isLoading, isError } = useGetMe({ 
+  const { data: user, isLoading, isError, error } = useGetMe({ 
     query: { 
       queryKey: getGetMeQueryKey(),
       retry: false,
@@ -63,15 +66,51 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
   }, [theme]);
 
   useEffect(() => {
-    if (!token || isError) {
+    const statusCode = (() => {
+      const e = error as { status?: number; response?: { status?: number } } | undefined;
+      return e?.status || e?.response?.status || 0;
+    })();
+
+    if (!token) {
       logout();
       if (location !== '/auth/login' && location !== '/auth/register' && location !== '/') {
         setLocation('/auth/login');
       }
+    } else if (isError && (statusCode === 401 || statusCode === 403)) {
+      logout();
+      setLocation('/auth/login');
     } else if (requireAdmin && user && user.role !== 'ADMIN') {
       setLocation('/dashboard');
     }
-  }, [token, isError, location, setLocation, logout, requireAdmin, user]);
+  }, [token, isError, error, location, setLocation, logout, requireAdmin, user]);
+
+  useEffect(() => {
+    let active = true;
+    const loadLanguages = async () => {
+      try {
+        const locales = await fetchLanguagesFromBackend();
+        if (!active) return;
+        setDynamicLanguages(locales.filter((l) => l.isActive).map((l) => ({ code: l.code, nativeLabel: l.nativeLabel })));
+      } catch {
+        if (!active) return;
+        setDynamicLanguages([]);
+      }
+    };
+    void loadLanguages();
+    return () => { active = false; };
+  }, []);
+
+  const handleLanguageChange = (nextLanguage: Language) => {
+    setLanguage(nextLanguage);
+    persistLocale(nextLanguage);
+    const next = buildLocalizedPath(
+      nextLanguage,
+      window.location.pathname,
+      window.location.search,
+      window.location.hash,
+    );
+    window.location.assign(next);
+  };
 
   const handleLogout = () => {
     doLogout();
@@ -98,6 +137,13 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
     { href: '/history', icon: History, label: t('nav.history') },
     { href: '/referrals', icon: Users, label: t('nav.referrals') },
   ];
+
+  const languageOptions = dynamicLanguages.length
+    ? dynamicLanguages.map((item) => ({ value: item.code, nativeLabel: item.nativeLabel }))
+    : PRIMARY_LANGUAGE_OPTIONS.concat(EXTENDED_LANGUAGE_OPTIONS).map((option) => ({
+      value: option.value,
+      nativeLabel: option.nativeLabel,
+    }));
 
   return (
     <div className="min-h-screen bg-background flex text-foreground selection:bg-primary/30">
@@ -145,13 +191,23 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
             </select>
             <select 
               value={language} 
-              onChange={(e) => setLanguage(e.target.value as Language)}
+              onChange={(e) => { handleLanguageChange(e.target.value as Language); }}
               className="bg-transparent text-xs text-muted-foreground outline-none cursor-pointer"
             >
-              <option value="fr">FR</option>
-              <option value="en">EN</option>
-              <option value="es">ES</option>
-              <option value="ht">HT</option>
+              <optgroup label="Principales">
+                {languageOptions.slice(0, 4).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.nativeLabel}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Autres langues">
+                {languageOptions.slice(4).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.nativeLabel}
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </div>
           
@@ -218,6 +274,30 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
                   {link.label}
                 </Link>
               ))}
+              {user?.role === 'ADMIN' && !requireAdmin && (
+                <Link
+                  href="/admin"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="flex items-center gap-4 p-4 rounded-xl hover:bg-muted/50 text-lg font-medium"
+                >
+                  <ShieldAlert className="w-6 h-6 text-primary" />
+                  {t('nav.admin')}
+                </Link>
+              )}
+              <div className="rounded-xl border border-border/60 p-3 mt-3">
+                <p className="text-xs text-muted-foreground mb-1">Langue</p>
+                <select
+                  value={language}
+                  onChange={(e) => { handleLanguageChange(e.target.value as Language); }}
+                  className="w-full bg-transparent text-sm text-foreground outline-none"
+                >
+                  {languageOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.nativeLabel}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <button onClick={handleLogout} className="w-full flex items-center gap-4 p-4 rounded-xl text-destructive hover:bg-destructive/10 text-lg font-medium mt-4">
                 <LogOut className="w-6 h-6" />
                 Logout

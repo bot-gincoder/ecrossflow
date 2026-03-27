@@ -4,11 +4,13 @@ import { Loader2 } from 'lucide-react';
 interface GoogleSignInButtonProps {
   label: string;
   isLoading: boolean;
+  disabled?: boolean;
+  disabledTitle?: string;
   onSuccess: (accessToken: string) => void;
   onError: () => void;
 }
 
-export function GoogleSignInButton({ label, isLoading, onSuccess, onError }: GoogleSignInButtonProps) {
+export function GoogleSignInButton({ label, isLoading, disabled = false, disabledTitle, onSuccess, onError }: GoogleSignInButtonProps) {
   const login = useGoogleLogin({
     onSuccess: (response) => onSuccess(response.access_token),
     onError: onError,
@@ -18,8 +20,9 @@ export function GoogleSignInButton({ label, isLoading, onSuccess, onError }: Goo
   return (
     <button
       type="button"
-      onClick={() => login()}
-      disabled={isLoading}
+      onClick={() => { if (!disabled && !isLoading) login(); }}
+      disabled={isLoading || disabled}
+      title={disabled ? (disabledTitle || "Action indisponible") : undefined}
       className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-card border border-border rounded-xl hover:bg-accent hover:border-primary/30 transition-all font-medium text-sm disabled:opacity-60 disabled:cursor-not-allowed"
     >
       {isLoading ? (

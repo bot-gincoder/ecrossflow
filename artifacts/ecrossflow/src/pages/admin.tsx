@@ -5,6 +5,7 @@ import {
   Users, DollarSign, Activity, CheckCircle, XCircle, Loader2, Search,
   BarChart3, ShieldAlert, LucideIcon, ArrowDownLeft, ArrowUpRight, Layers,
   TrendingUp, FileText, Download, Clock, RefreshCw, Wallet, AlertTriangle, Eye
+  , Trash2, CheckSquare, Square
 } from 'lucide-react';
 import {
   useGetAdminStats, useGetAdminUsers, useGetPendingDeposits, useApproveDeposit,
@@ -15,6 +16,7 @@ import {
 import type { AdminUser, AdminDeposit, AdminWithdrawal, AdminBoardInstance, AdminUserDetail, AdminReportGrowthItem } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '@/hooks/use-store';
 
 type AdminTab = 'overview' | 'users' | 'deposits' | 'withdrawals' | 'boards' | 'reports';
 
@@ -116,7 +118,11 @@ export default function AdminPage() {
   const [adjustingUser, setAdjustingUser] = useState<{ id: string; username: string } | null>(null);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [reportPeriod, setReportPeriod] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
+  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+  const [selectAllFiltered, setSelectAllFiltered] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const queryClient = useQueryClient();
+  const { token } = useAppStore();
 
   useEffect(() => {
     const newTab: AdminTab = tabParam && validTabs.includes(tabParam) ? tabParam : 'overview';
@@ -142,6 +148,79 @@ export default function AdminPage() {
   const { mutate: rejectW } = useRejectWithdrawal({ mutation: { onSuccess: () => { setRejectingId(null); queryClient.invalidateQueries(); } } });
   const { mutate: activate } = useActivateUser({ mutation: { onSuccess: () => queryClient.invalidateQueries() } });
   const { mutate: suspend } = useSuspendUser({ mutation: { onSuccess: () => queryClient.invalidateQueries() } });
+
+  const visibleUserIds = (usersData?.users || []).map((u: AdminUser) => u.id);
+  const allVisibleSelected = visibleUserIds.length > 0 && visibleUserIds.every((id: string) => selectedUserIds.includes(id));
+
+  const toggleSelectOne = (id: string) => {
+    setSelectAllFiltered(false);
+    setSelectedUserIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+
+  const toggleSelectVisible = () => {
+    setSelectAllFiltered(false);
+    if (allVisibleSelected) {
+      setSelectedUserIds((prev) => prev.filter((id) => !visibleUserIds.includes(id)));
+      return;
+    }
+    setSelectedUserIds((prev) => Array.from(new Set([...prev, ...visibleUserIds])));
+  };
+
+  const runBulkUsersAction = async (action: 'activate' | 'suspend' | 'delete') => {
+    if (!token) return;
+    if (!selectAllFiltered && selectedUserIds.length === 0) return;
+    if (action === 'delete' && !window.confirm('Supprimer définitivement les comptes sélectionnés ?')) return;
+    setBulkBusy(true);
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/users/bulk-action`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          action,
+          userIds: selectAllFiltered ? 'all' : selectedUserIds,
+          search: search || undefined,
+          status: statusFilter || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.message || 'Bulk action failed');
+      }
+      setSelectedUserIds([]);
+      setSelectAllFiltered(false);
+      queryClient.invalidateQueries();
+    } catch (e) {
+      console.error(e);
+      alert('Action échouée. Vérifiez les logs backend.');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  const deleteOneUser = async (userId: string, username: string) => {
+    if (!token) return;
+    if (!window.confirm(`Supprimer définitivement @${username} ?`)) return;
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/users/${userId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.message || 'Delete failed');
+      }
+      setSelectedUserIds((prev) => prev.filter((id) => id !== userId));
+      queryClient.invalidateQueries();
+    } catch (e) {
+      console.error(e);
+      alert('Suppression échouée. Vérifiez les logs backend.');
+    }
+  };
 
   const tabs: [AdminTab, string, LucideIcon][] = [
     ['overview', 'Vue Globale', BarChart3],
@@ -348,6 +427,47 @@ export default function AdminPage() {
                 <option value="SUSPENDED">Suspendu</option>
               </select>
             </div>
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/30 px-3 py-2">
+              <button
+                onClick={toggleSelectVisible}
+                className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-1.5 text-xs hover:border-primary/40"
+              >
+                {allVisibleSelected ? <CheckSquare className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+                Sélectionner la page
+              </button>
+              <button
+                onClick={() => { setSelectAllFiltered(true); setSelectedUserIds([]); }}
+                className={`rounded-lg border px-3 py-1.5 text-xs ${selectAllFiltered ? 'border-primary text-primary' : 'border-border hover:border-primary/40'}`}
+              >
+                Sélectionner tous (filtre)
+              </button>
+              <span className="text-xs text-muted-foreground">
+                {selectAllFiltered ? `Tous les résultats filtrés (${usersData?.total ?? 0})` : `${selectedUserIds.length} sélectionné(s)`}
+              </span>
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  onClick={() => runBulkUsersAction('activate')}
+                  disabled={bulkBusy || (!selectAllFiltered && selectedUserIds.length === 0)}
+                  className="rounded-lg bg-primary/15 text-primary px-3 py-1.5 text-xs disabled:opacity-50"
+                >
+                  Activer
+                </button>
+                <button
+                  onClick={() => runBulkUsersAction('suspend')}
+                  disabled={bulkBusy || (!selectAllFiltered && selectedUserIds.length === 0)}
+                  className="rounded-lg bg-yellow-500/15 text-yellow-400 px-3 py-1.5 text-xs disabled:opacity-50"
+                >
+                  Suspendre
+                </button>
+                <button
+                  onClick={() => runBulkUsersAction('delete')}
+                  disabled={bulkBusy || (!selectAllFiltered && selectedUserIds.length === 0)}
+                  className="rounded-lg bg-red-500/15 text-red-400 px-3 py-1.5 text-xs disabled:opacity-50"
+                >
+                  Supprimer
+                </button>
+              </div>
+            </div>
             <div className="space-y-2">
               {usersData?.users?.map((u: AdminUser, idx: number) => (
                 <motion.div
@@ -356,6 +476,12 @@ export default function AdminPage() {
                   className="flex items-center justify-between bg-card/40 border border-border/50 rounded-xl px-4 py-3"
                 >
                   <div className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectAllFiltered ? true : selectedUserIds.includes(u.id)}
+                      onChange={() => toggleSelectOne(u.id)}
+                      className="h-4 w-4 accent-primary"
+                    />
                     <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
                       {u.firstName?.[0]}{u.lastName?.[0]}
                     </div>
@@ -381,6 +507,13 @@ export default function AdminPage() {
                       title="Ajuster solde"
                     >
                       <Wallet className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => deleteOneUser(u.id, u.username)}
+                      className="p-1.5 text-muted-foreground hover:text-red-500 transition-colors"
+                      title="Supprimer définitivement"
+                    >
+                      <Trash2 className="w-4 h-4" />
                     </button>
                     {u.status === 'ACTIVE' ? (
                       <button

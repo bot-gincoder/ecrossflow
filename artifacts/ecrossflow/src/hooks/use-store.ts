@@ -2,20 +2,23 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
 export type Theme = 'light' | 'dark' | 'midnight' | 'gold';
-export type Language = 'fr' | 'en' | 'es' | 'ht';
+export type CoreLanguage = 'fr' | 'en' | 'es' | 'ht';
+export type Language = string;
 
 interface AppState {
   theme: Theme;
   language: Language;
   token: string | null;
+  remoteMessages: Record<string, string>;
   setTheme: (theme: Theme) => void;
   setLanguage: (lang: Language) => void;
+  setRemoteMessages: (messages: Record<string, string>) => void;
   setToken: (token: string | null) => void;
   logout: () => void;
   t: (key: string) => string;
 }
 
-const translations: Record<Language, Record<string, string>> = {
+const translations: Record<CoreLanguage, Record<string, string>> = {
   fr: {
     'nav.dashboard': 'Tableau de bord',
     'nav.wallet': 'Bourse',
@@ -594,12 +597,15 @@ const translations: Record<Language, Record<string, string>> = {
   }
 };
 
+export const BASE_FR_TRANSLATIONS = translations.fr;
+
 export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       theme: 'dark',
       language: 'fr',
       token: null,
+      remoteMessages: {},
       setTheme: (theme) => {
         const root = document.documentElement;
         root.classList.remove('light', 'dark', 'midnight', 'gold');
@@ -607,6 +613,7 @@ export const useAppStore = create<AppState>()(
         set({ theme });
       },
       setLanguage: (language) => set({ language }),
+      setRemoteMessages: (remoteMessages) => set({ remoteMessages }),
       setToken: (token) => {
         if (token) localStorage.setItem('ecrossflow_token', token);
         else localStorage.removeItem('ecrossflow_token');
@@ -617,8 +624,10 @@ export const useAppStore = create<AppState>()(
         set({ token: null });
       },
       t: (key) => {
-        const lang = get().language;
-        return translations[lang][key] || translations['fr'][key] || key;
+        const lang = get().language as CoreLanguage;
+        const localPack = translations[lang] ?? translations.fr;
+        const remote = get().remoteMessages[key];
+        return remote || localPack[key] || translations.fr[key] || key;
       }
     }),
     { 

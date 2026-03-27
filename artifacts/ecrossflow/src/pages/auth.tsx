@@ -8,7 +8,7 @@ import { GoogleSignInButton } from '@/components/google-sign-in-button';
 import {
   Loader2, ArrowRight, ShieldCheck, Mail, Lock, User, Hash,
   Check, X, Eye, EyeOff, Phone, AlertTriangle, ChevronDown,
-  MessageSquare, Smartphone, MessageCircle
+  Smartphone
 } from 'lucide-react';
 
 // ── Country codes list ──────────────────────────────────────────────────────
@@ -57,6 +57,7 @@ function getPasswordStrength(password: string): { score: number; label: string; 
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
+const GOOGLE_CLIENT_ID_RE = /^[a-zA-Z0-9-]+\.apps\.googleusercontent\.com$/;
 
 interface GoogleNewUser {
   email: string;
@@ -67,7 +68,7 @@ interface GoogleNewUser {
 }
 
 // ── OTP Method Modal ─────────────────────────────────────────────────────────
-type OtpMethod = 'email' | 'sms' | 'whatsapp';
+type OtpMethod = 'email' | 'sms';
 
 interface OTPMethodModalProps {
   email: string;
@@ -78,7 +79,34 @@ interface OTPMethodModalProps {
 function OTPMethodModal({ email, token, onDone }: OTPMethodModalProps) {
   const [selected, setSelected] = useState<OtpMethod>('email');
   const [sending, setSending] = useState(false);
-  const hasTwilio = false; // Will be true once Twilio is configured
+  const [smsAvailable, setSmsAvailable] = useState(false);
+  const [phonePresent, setPhonePresent] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadOptions = async () => {
+      try {
+        const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+        const res = await fetch(`${base}/api/auth/otp-delivery-options`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json() as {
+          methods?: {
+            sms?: { available?: boolean };
+          };
+          phonePresent?: boolean;
+        };
+        if (!mounted) return;
+        setSmsAvailable(Boolean(data.methods?.sms?.available));
+        setPhonePresent(Boolean(data.phonePresent));
+      } catch {
+        // keep email-only mode on failure
+      }
+    };
+    void loadOptions();
+    return () => { mounted = false; };
+  }, [token]);
 
   const methods: { key: OtpMethod; label: string; desc: string; icon: React.ReactNode; available: boolean }[] = [
     {
@@ -91,16 +119,13 @@ function OTPMethodModal({ email, token, onDone }: OTPMethodModalProps) {
     {
       key: 'sms',
       label: 'SMS',
-      desc: hasTwilio ? 'Via votre numéro de téléphone' : 'Bientôt disponible',
+      desc: smsAvailable
+        ? 'Via votre numéro de téléphone'
+        : phonePresent
+        ? 'Indisponible temporairement'
+        : 'Ajoutez un numéro de téléphone',
       icon: <Smartphone className="w-5 h-5" />,
-      available: hasTwilio,
-    },
-    {
-      key: 'whatsapp',
-      label: 'WhatsApp',
-      desc: hasTwilio ? 'Via votre numéro WhatsApp' : 'Bientôt disponible',
-      icon: <MessageCircle className="w-5 h-5" />,
-      available: hasTwilio,
+      available: smsAvailable,
     },
   ];
 
@@ -193,7 +218,7 @@ function OTPMethodModal({ email, token, onDone }: OTPMethodModalProps) {
 export default function AuthPage() {
   const [location, setLocation] = useLocation();
   const isLogin = location === '/auth/login';
-  const { setToken } = useAppStore();
+  const { setToken, language } = useAppStore();
 
   const urlParams = new URLSearchParams(typeof window !== 'undefined' ? window.location.search : '');
   const refFromUrl = urlParams.get('ref') || '';
@@ -304,10 +329,16 @@ export default function AuthPage() {
     setGoogleError(null);
     try {
       const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const payload: { accessToken: string; referralCode?: string; phone?: string; preferredLanguage?: string } = { accessToken };
+      if (!isLogin && referralState.status === 'valid' && formData.referralCode) {
+        payload.referralCode = formData.referralCode;
+        if (formData.phone) payload.phone = `${countryCode}${formData.phone}`;
+        payload.preferredLanguage = language;
+      }
       const res = await fetch(`${base}/api/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json() as {
         code?: string; token?: string; email?: string;
@@ -322,6 +353,9 @@ export default function AuthPage() {
         });
         setFormData(prev => ({ ...prev, firstName: data.firstName || '', lastName: data.lastName || '', email: data.email || '' }));
         if (!isLogin) setLocation('/auth/register');
+      } else if (data.code === 'EMAIL_NOT_VERIFIED' && data.email) {
+        setPendingEmail(data.email);
+        setLocation(`/auth/check-email?email=${encodeURIComponent(data.email)}`);
       } else if (data.token) {
         setToken(data.token);
         setLocation('/dashboard');
@@ -330,7 +364,7 @@ export default function AuthPage() {
       }
     } catch { setGoogleError('Erreur réseau. Réessayez.'); }
     finally { setIsGoogleLoading(false); }
-  }, [isLogin, setToken, setLocation]);
+  }, [countryCode, formData.phone, formData.referralCode, isLogin, language, referralState.status, setLocation, setToken]);
 
   const handleGoogleNewUserSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -343,11 +377,24 @@ export default function AuthPage() {
       const res = await fetch(`${base}/api/auth/google`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ accessToken: googleNewUser.idToken, referralCode: formData.referralCode, phone: fullPhone }),
+        body: JSON.stringify({
+          accessToken: googleNewUser.idToken,
+          referralCode: formData.referralCode,
+          phone: fullPhone,
+          preferredLanguage: language,
+        }),
       });
-      const data = await res.json() as { token?: string; message?: string };
-      if (data.token) { setToken(data.token); setLocation('/dashboard'); }
-      else setGoogleError(data.message || 'Erreur lors de la création du compte');
+      const data = await res.json() as { token?: string; code?: string; email?: string; message?: string };
+      if (data.token) {
+        setToken(data.token);
+        setLocation('/dashboard');
+      } else if (data.code === 'EMAIL_NOT_VERIFIED' && data.email) {
+        setPendingEmail(data.email);
+        setGoogleNewUser(null);
+        setLocation(`/auth/check-email?email=${encodeURIComponent(data.email)}`);
+      } else {
+        setGoogleError(data.message || 'Erreur lors de la création du compte');
+      }
     } catch { setGoogleError('Erreur réseau. Réessayez.'); }
     finally { setIsGoogleLoading(false); }
   };
@@ -400,7 +447,8 @@ export default function AuthPage() {
   const loginErrorMsg = loginError?.data?.message || loginError?.message;
   const registerErrorMsg = registerError?.data?.message || registerError?.message;
   const activeErrorMsg = isLogin ? loginErrorMsg : registerErrorMsg;
-  const isGoogleConfigured = Boolean(GOOGLE_CLIENT_ID);
+  const isGoogleConfigured = GOOGLE_CLIENT_ID_RE.test(GOOGLE_CLIENT_ID);
+  const isGoogleRegisterBlocked = !isLogin && referralState.status !== 'valid';
 
   // Referral invalid message (custom from backend for ECFSTART)
   const referralInvalidMsg = referralState.status === 'invalid' && (referralState as any).name
@@ -487,12 +535,12 @@ export default function AuthPage() {
           {pendingEmail && (
             <div className="p-4 mb-6 rounded-xl bg-yellow-500/10 border border-yellow-500/30 text-yellow-600 dark:text-yellow-400 text-sm">
               <p className="font-semibold mb-1">Vérification requise</p>
-              <p className="mb-3 text-xs opacity-90">Votre compte n'est pas encore vérifié. Consultez votre boîte mail pour le code OTP.</p>
+              <p className="mb-3 text-xs opacity-90">Votre compte n'est pas encore vérifié. Consultez votre boîte mail et utilisez le lien de confirmation.</p>
               <button
                 onClick={() => setLocation(`/auth/verify-email?email=${encodeURIComponent(pendingEmail)}`)}
                 className="text-xs font-semibold underline hover:no-underline"
               >
-                Accéder à la vérification →
+                Accéder à la vérification OTP →
               </button>
             </div>
           )}
@@ -588,12 +636,21 @@ export default function AuthPage() {
               {/* Google auth button */}
               <div className="mb-6">
                 {isGoogleConfigured ? (
-                  <GoogleSignInButton
-                    label={isLogin ? 'Connexion avec Google' : 'Inscription avec Google'}
-                    isLoading={isGoogleLoading}
-                    onSuccess={(accessToken) => { setGoogleError(null); handleGoogleSuccess(accessToken); }}
-                    onError={() => setGoogleError('Connexion Google annulée ou échouée.')}
-                  />
+                  <>
+                    <GoogleSignInButton
+                      label={isLogin ? 'Connexion avec Google' : 'Inscription avec Google'}
+                      isLoading={isGoogleLoading}
+                      disabled={isGoogleRegisterBlocked}
+                      disabledTitle={isGoogleRegisterBlocked ? "Renseignez d'abord un code de parrainage valide" : undefined}
+                      onSuccess={(accessToken) => { setGoogleError(null); handleGoogleSuccess(accessToken); }}
+                      onError={() => setGoogleError('Connexion Google annulée ou échouée.')}
+                    />
+                    {isGoogleRegisterBlocked && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        L'inscription Google est désactivée tant que le code de parrainage n'est pas valide.
+                      </p>
+                    )}
+                  </>
                 ) : (
                   <div className="w-full flex items-center justify-center gap-3 py-3 px-4 bg-card border border-border/50 rounded-xl text-sm text-muted-foreground opacity-60 cursor-not-allowed">
                     <AlertTriangle className="w-4 h-4" />
