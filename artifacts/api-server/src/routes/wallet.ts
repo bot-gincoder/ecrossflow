@@ -31,6 +31,7 @@ import {
 } from "../services/crypto-provider.js";
 import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
 import { isCirclePrimary } from "../services/circle.js";
+import { getNumberSetting, getSystemSetting } from "../services/system-config.js";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
@@ -64,8 +65,8 @@ const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
 const CRYPTO_PROVIDER_MIN_DEPOSIT_USD = amountLimit("CRYPTO_PROVIDER_MIN_DEPOSIT_USD", 7);
 
 const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC", "BNB"]);
-const SUPPORTED_DEPOSIT_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"]);
-const SUPPORTED_WITHDRAW_METHODS = new Set(["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"]);
+const BASE_DEPOSIT_METHODS = ["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"] as const;
+const BASE_WITHDRAW_METHODS = ["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"] as const;
 const MATIC_PER_USD = Number.parseFloat(process.env.MATIC_PER_USD || "1.1");
 
 const FIXED_RATES: Record<string, number> = {
@@ -85,6 +86,25 @@ function parsePositiveAmount(value: unknown): number | null {
   const num = typeof value === "string" ? parseFloat(value) : typeof value === "number" ? value : NaN;
   if (!Number.isFinite(num) || num <= 0) return null;
   return num;
+}
+
+function normalizeMethodList(value: unknown, fallback: readonly string[]): Set<string> {
+  if (!Array.isArray(value)) return new Set(fallback);
+  const allowed = new Set(fallback);
+  const normalized = value
+    .map((v) => String(v || "").toUpperCase().trim())
+    .filter((v) => allowed.has(v));
+  return new Set(normalized.length ? normalized : fallback);
+}
+
+async function getEnabledDepositMethods(): Promise<Set<string>> {
+  const configured = await getSystemSetting<unknown>("deposit_methods_enabled", BASE_DEPOSIT_METHODS);
+  return normalizeMethodList(configured, BASE_DEPOSIT_METHODS);
+}
+
+async function getEnabledWithdrawMethods(): Promise<Set<string>> {
+  const configured = await getSystemSetting<unknown>("withdraw_methods_enabled", BASE_WITHDRAW_METHODS);
+  return normalizeMethodList(configured, BASE_WITHDRAW_METHODS);
 }
 
 function mapCryptoDepositProviderStatus(raw: unknown): "COMPLETED" | "FAILED" | "CANCELLED" | null {
@@ -176,6 +196,15 @@ router.get("/wallet/rates", requireAuth as never, async (req: AuthRequest, res) 
   });
 });
 
+router.get("/wallet/payment-methods", requireAuth as never, async (_req: AuthRequest, res) => {
+  const depositMethods = [...await getEnabledDepositMethods()];
+  const withdrawMethods = [...await getEnabledWithdrawMethods()];
+  res.json({
+    depositMethods,
+    withdrawMethods,
+  });
+});
+
 router.get("/wallet/ledger", requireAuth as never, async (req: AuthRequest, res) => {
   await ensureLedgerInfra();
   const { page = "1", limit = "25" } = req.query as Record<string, string>;
@@ -250,7 +279,8 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
   }
 
   const paymentMethodNormalized = String(paymentMethod).toUpperCase();
-  if (!SUPPORTED_DEPOSIT_METHODS.has(paymentMethodNormalized)) {
+  const enabledDepositMethods = await getEnabledDepositMethods();
+  if (!enabledDepositMethods.has(paymentMethodNormalized)) {
     res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
     return;
   }
@@ -296,10 +326,11 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
   const rate = FIXED_RATES[String(currency)] ?? 1;
   const amountUsd = amountNum / rate;
-  if (amountUsd < MIN_DEPOSIT_USD || amountUsd > MAX_DEPOSIT_USD) {
+  const minDepositUsd = await getNumberSetting("min_deposit_usd", MIN_DEPOSIT_USD);
+  if (amountUsd < minDepositUsd || amountUsd > MAX_DEPOSIT_USD) {
     res.status(400).json({
       error: "Bad Request",
-      message: `Deposit amount must be between $${MIN_DEPOSIT_USD} and $${MAX_DEPOSIT_USD} (USD equivalent)`,
+      message: `Deposit amount must be between $${minDepositUsd} and $${MAX_DEPOSIT_USD} (USD equivalent)`,
     });
     return;
   }
@@ -855,7 +886,8 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
   }
 
   const paymentMethodNormalized = String(paymentMethod).toUpperCase();
-  if (!SUPPORTED_WITHDRAW_METHODS.has(paymentMethodNormalized)) {
+  const enabledWithdrawMethods = await getEnabledWithdrawMethods();
+  if (!enabledWithdrawMethods.has(paymentMethodNormalized)) {
     res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
     return;
   }

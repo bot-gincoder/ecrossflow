@@ -10,6 +10,12 @@ const REQUIRED_ACTIVE = 2;
 
 export default function ReferralsPage() {
   const { data } = useGetReferrals();
+  const enhanced = (data || {}) as typeof data & {
+    whatsappShareUrl?: string;
+    telegramShareUrl?: string;
+    shareMessages?: { whatsapp?: string; telegram?: string; generic?: string };
+    shareLinks?: { whatsapp?: string; telegram?: string };
+  };
   const [copied, setCopied] = useState<'code' | 'link' | null>(null);
   const [showQR, setShowQR] = useState(false);
 
@@ -30,12 +36,22 @@ export default function ReferralsPage() {
   };
 
   const shareWhatsApp = () => {
-    const text = `Rejoins Ecrossflow et gagne avec les boards pyramidaux ! 🚀\nUtilise mon code ${data?.referralCode} ou inscris-toi ici : ${data?.referralLink}`;
+    const url = enhanced.shareLinks?.whatsapp || enhanced.whatsappShareUrl;
+    if (url) {
+      window.open(url, '_blank');
+      return;
+    }
+    const text = `Rejoins Ecrossflow. Code: ${data?.referralCode}. Lien: ${data?.referralLink}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
   };
 
   const shareTelegram = () => {
-    const text = `Rejoins Ecrossflow ! Code : ${data?.referralCode}`;
+    const url = enhanced.shareLinks?.telegram || enhanced.telegramShareUrl;
+    if (url) {
+      window.open(url, '_blank');
+      return;
+    }
+    const text = `Rejoins Ecrossflow. Code: ${data?.referralCode}.`;
     window.open(`https://t.me/share/url?url=${encodeURIComponent(data?.referralLink || '')}&text=${encodeURIComponent(text)}`, '_blank');
   };
 

@@ -20,6 +20,38 @@ import { useAppStore } from '@/hooks/use-store';
 
 type AdminTab = 'overview' | 'users' | 'deposits' | 'withdrawals' | 'boards' | 'reports';
 
+type EvolutionConsistencyCounts = {
+  activeAll: number;
+  activeNonAdmin: number;
+  numberedAll: number;
+  numberedNonAdmin: number;
+  numberedActiveNonAdmin: number;
+  usersWithCurrentBoardNonAdmin: number;
+  positionedLegacyNonAdmin: number;
+  evolutionValidatedTotal: number;
+  evolutionDisplayedGraphicalTotal: number;
+};
+
+type EvolutionConsistencyAnomaly = {
+  id: string;
+  username: string;
+  accountNumber: number | null;
+  currentBoard: string | null;
+  flags: string[];
+};
+
+type EvolutionConsistencySnapshot = {
+  generatedAt: string;
+  counts: EvolutionConsistencyCounts;
+  evolutionByBoard: Record<string, number>;
+  anomalies: EvolutionConsistencyAnomaly[];
+};
+
+type PlatformResetStatus = {
+  hasPin: boolean;
+  pinConfiguredAt: string | null;
+};
+
 function StatCard({ label, value, icon: Icon, color }: { label: string; value: string | number | undefined; icon: LucideIcon; color: string }) {
   return (
     <motion.div
@@ -48,8 +80,10 @@ function AdjustBalanceModal({ userId, username, onClose }: { userId: string; use
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!amount || !note) return;
-    adjust({ id: userId, data: { amount: parseFloat(amount), note } });
+    if (!amount) return;
+    const parsed = parseFloat(amount);
+    if (!Number.isFinite(parsed) || parsed === 0) return;
+    adjust({ id: userId, data: { amount: parsed, note: note.trim() || 'Admin recharge/adjustment' } });
   };
 
   return (
@@ -58,7 +92,7 @@ function AdjustBalanceModal({ userId, username, onClose }: { userId: string; use
         initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
         className="bg-card border border-border rounded-2xl p-6 w-full max-w-md shadow-2xl"
       >
-        <h3 className="text-lg font-display font-bold mb-1">Ajuster le solde</h3>
+        <h3 className="text-lg font-display font-bold mb-1">Recharger / Ajuster le solde</h3>
         <p className="text-sm text-muted-foreground mb-5">@{username}</p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
@@ -72,22 +106,33 @@ function AdjustBalanceModal({ userId, username, onClose }: { userId: string; use
               className="w-full bg-background border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
               required
             />
+            <div className="mt-2 flex flex-wrap gap-2">
+              {['5', '10', '20', '50', '100'].map((v) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setAmount(v)}
+                  className="rounded-lg border border-border px-2.5 py-1 text-xs hover:border-primary/40"
+                >
+                  +${v}
+                </button>
+              ))}
+            </div>
           </div>
           <div>
-            <label className="text-xs text-muted-foreground mb-1 block">Note obligatoire</label>
+            <label className="text-xs text-muted-foreground mb-1 block">Note (optionnel)</label>
             <input
               type="text"
               value={note}
               onChange={e => setNote(e.target.value)}
-              placeholder="Raison de l'ajustement..."
+              placeholder="Raison de l'ajustement (optionnel)"
               className="w-full bg-background border border-border rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-              required
             />
           </div>
           <div className="flex gap-2">
             <button
               type="submit"
-              disabled={isPending || !amount || !note}
+              disabled={isPending || !amount}
               className="flex-1 flex items-center justify-center gap-2 py-3 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:shadow-[0_0_15px_rgba(0,255,170,0.3)] transition-all disabled:opacity-50"
             >
               {isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
@@ -95,6 +140,100 @@ function AdjustBalanceModal({ userId, username, onClose }: { userId: string; use
             </button>
             <button type="button" onClick={onClose} className="px-4 py-3 bg-muted rounded-xl text-sm">
               Annuler
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+}
+
+function CreateUserModal({
+  token,
+  onClose,
+  onCreated,
+}: {
+  token: string | null;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [initialBalance, setInitialBalance] = useState('0');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token) return;
+    setBusy(true);
+    setError('');
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/users/create`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          firstName,
+          lastName,
+          username,
+          email,
+          phone: phone || undefined,
+          password,
+          referralCode: referralCode || undefined,
+          initialBalance: Number.parseFloat(initialBalance || '0'),
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(payload?.message || 'Creation failed');
+      }
+      onCreated();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Creation failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }} animate={{ opacity: 1, scale: 1 }}
+        className="bg-card border border-border rounded-2xl p-6 w-full max-w-xl shadow-2xl"
+      >
+        <h3 className="text-lg font-display font-bold mb-1">Ajouter un utilisateur</h3>
+        <p className="text-sm text-muted-foreground mb-4">Création rapide + recharge initiale optionnelle.</p>
+        <form onSubmit={submit} className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Prénom" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" required />
+            <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Nom" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" required />
+            <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Username" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" required />
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" required />
+            <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Téléphone (optionnel)" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" />
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Mot de passe (min 8)" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" minLength={8} required />
+            <input value={referralCode} onChange={(e) => setReferralCode(e.target.value.toUpperCase())} placeholder="Code parrain (optionnel)" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" />
+            <input type="number" step="0.01" min="0" value={initialBalance} onChange={(e) => setInitialBalance(e.target.value)} placeholder="Recharge initiale (USD)" className="bg-background border border-border rounded-xl px-3 py-2.5 text-sm" />
+          </div>
+          {error && <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</div>}
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={onClose} className="px-4 py-2 bg-muted rounded-xl text-sm">Annuler</button>
+            <button
+              type="submit"
+              disabled={busy}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-primary text-primary-foreground text-sm disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+              Créer le compte
             </button>
           </div>
         </form>
@@ -116,11 +255,25 @@ export default function AdminPage() {
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectType, setRejectType] = useState<'deposit' | 'withdrawal'>('deposit');
   const [adjustingUser, setAdjustingUser] = useState<{ id: string; username: string } | null>(null);
+  const [createUserOpen, setCreateUserOpen] = useState(false);
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [reportPeriod, setReportPeriod] = useState<'7d' | '30d' | '90d' | 'all'>('30d');
   const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
   const [selectAllFiltered, setSelectAllFiltered] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [consistency, setConsistency] = useState<EvolutionConsistencySnapshot | null>(null);
+  const [consistencyLoading, setConsistencyLoading] = useState(false);
+  const [consistencyRepairing, setConsistencyRepairing] = useState(false);
+  const [consistencyRepairMessage, setConsistencyRepairMessage] = useState('');
+  const [platformResetStatus, setPlatformResetStatus] = useState<PlatformResetStatus | null>(null);
+  const [platformResetLoading, setPlatformResetLoading] = useState(false);
+  const [platformResetPin, setPlatformResetPin] = useState('');
+  const [platformResetConfirmPin, setPlatformResetConfirmPin] = useState('');
+  const [platformResetCurrentPin, setPlatformResetCurrentPin] = useState('');
+  const [platformResetExecutePin, setPlatformResetExecutePin] = useState('');
+  const [platformResetPinBusy, setPlatformResetPinBusy] = useState(false);
+  const [platformResetBusy, setPlatformResetBusy] = useState(false);
+  const [platformResetMessage, setPlatformResetMessage] = useState('');
   const queryClient = useQueryClient();
   const { token } = useAppStore();
 
@@ -221,6 +374,177 @@ export default function AdminPage() {
       alert('Suppression échouée. Vérifiez les logs backend.');
     }
   };
+
+  const runQueueSync = async () => {
+    if (!token) return;
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/evolution/queue/sync`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'Sync failed');
+      queryClient.invalidateQueries();
+      alert(`Queue sync OK. Nouveaux numéros attribués: ${payload?.assigned ?? 0}`);
+    } catch (e) {
+      console.error(e);
+      alert('Sync queue échoué. Vérifiez les logs backend.');
+    }
+  };
+
+  const loadConsistency = async () => {
+    if (!token) return;
+    setConsistencyLoading(true);
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/evolution/consistency`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'Consistency audit failed');
+      setConsistency(payload as EvolutionConsistencySnapshot);
+    } catch (e) {
+      console.error(e);
+      alert('Audit de cohérence échoué. Vérifiez les logs backend.');
+    } finally {
+      setConsistencyLoading(false);
+    }
+  };
+
+  const runAutoConsistencyRepair = async () => {
+    if (!token) return;
+    setConsistencyRepairing(true);
+    setConsistencyRepairMessage('');
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/evolution/consistency/repair`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'Auto repair failed');
+      const actions = payload?.actions || {};
+      setConsistencyRepairMessage(
+        `Auto-fix OK · Numéros: ${actions.assignedQueueNumbers ?? 0} · Boards normalisés: ${actions.normalizedBoards ?? 0} · Boards nettoyés: ${actions.clearedStaleBoards ?? 0} · Promotions: ${actions.promotedUsers ?? 0}`
+      );
+      queryClient.invalidateQueries();
+      await loadConsistency();
+    } catch (e) {
+      console.error(e);
+      alert('Correction automatique échouée. Vérifiez les logs backend.');
+    } finally {
+      setConsistencyRepairing(false);
+    }
+  };
+
+  const loadPlatformResetStatus = async () => {
+    if (!token) return;
+    setPlatformResetLoading(true);
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/platform-reset/status`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'Platform reset status failed');
+      setPlatformResetStatus({
+        hasPin: Boolean(payload?.hasPin),
+        pinConfiguredAt: payload?.pinConfiguredAt ? String(payload.pinConfiguredAt) : null,
+      });
+    } catch (e) {
+      console.error(e);
+      alert('Impossible de charger le statut du PIN de réinitialisation.');
+    } finally {
+      setPlatformResetLoading(false);
+    }
+  };
+
+  const savePlatformResetPin = async () => {
+    if (!token) return;
+    if (!/^\d{4}$/.test(platformResetPin)) {
+      alert('Le PIN doit contenir exactement 4 chiffres.');
+      return;
+    }
+    if (platformResetPin !== platformResetConfirmPin) {
+      alert('La confirmation PIN ne correspond pas.');
+      return;
+    }
+
+    setPlatformResetPinBusy(true);
+    setPlatformResetMessage('');
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/platform-reset/pin`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          pin: platformResetPin,
+          confirmPin: platformResetConfirmPin,
+          currentPin: platformResetStatus?.hasPin ? platformResetCurrentPin : undefined,
+        }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'PIN configuration failed');
+      setPlatformResetPin('');
+      setPlatformResetConfirmPin('');
+      setPlatformResetCurrentPin('');
+      setPlatformResetMessage('PIN de réinitialisation enregistré.');
+      await loadPlatformResetStatus();
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'Configuration PIN échouée.');
+    } finally {
+      setPlatformResetPinBusy(false);
+    }
+  };
+
+  const executePlatformHardReset = async () => {
+    if (!token) return;
+    if (!/^\d{4}$/.test(platformResetExecutePin)) {
+      alert('Entrez le PIN à 4 chiffres pour confirmer la réinitialisation.');
+      return;
+    }
+    if (!window.confirm('Réinitialiser entièrement la base ? Cette action supprimera toutes les données sauf admin et ceo.')) {
+      return;
+    }
+
+    setPlatformResetBusy(true);
+    setPlatformResetMessage('');
+    try {
+      const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+      const res = await fetch(`${base}/api/admin/platform-reset/execute`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ pin: platformResetExecutePin }),
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload?.message || 'Platform reset failed');
+      setPlatformResetExecutePin('');
+      setPlatformResetMessage('Réinitialisation terminée. Définissez un nouveau PIN pour les prochains resets.');
+      queryClient.invalidateQueries();
+      await loadConsistency();
+      await loadPlatformResetStatus();
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : 'Réinitialisation échouée.');
+    } finally {
+      setPlatformResetBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    if (tab !== 'overview') return;
+    loadConsistency();
+    loadPlatformResetStatus();
+  }, [token, tab]);
 
   const tabs: [AdminTab, string, LucideIcon][] = [
     ['overview', 'Vue Globale', BarChart3],
@@ -390,15 +714,200 @@ export default function AdminPage() {
 
         {/* OVERVIEW TAB */}
         {tab === 'overview' && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <StatCard label="Total Utilisateurs" value={stats?.totalUsers} icon={Users} color="text-primary" />
-            <StatCard label="Utilisateurs Actifs" value={stats?.activeUsers} icon={Activity} color="text-emerald-400" />
-            <StatCard label="En attente d'activation" value={stats?.pendingUsers} icon={Clock} color="text-orange-400" />
-            <StatCard label="Boards Actifs" value={stats?.activeBoards} icon={Layers} color="text-violet-400" />
-            <StatCard label="Dépôts en attente" value={stats?.pendingDeposits} icon={ArrowDownLeft} color="text-yellow-400" />
-            <StatCard label="Retraits en attente" value={stats?.pendingWithdrawals} icon={ArrowUpRight} color="text-red-400" />
-            <StatCard label="Revenus Plateforme" value={`$${(stats?.totalPlatformRevenue || 0).toFixed(2)}`} icon={DollarSign} color="text-emerald-400" />
-            <StatCard label="Volume 7j" value={`$${(stats?.totalVolume7d || 0).toFixed(2)}`} icon={TrendingUp} color="text-blue-400" />
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <StatCard label="Total Utilisateurs" value={stats?.totalUsers} icon={Users} color="text-primary" />
+              <StatCard label="Utilisateurs Actifs" value={stats?.activeUsers} icon={Activity} color="text-emerald-400" />
+              <StatCard label="En attente d'activation" value={stats?.pendingUsers} icon={Clock} color="text-orange-400" />
+              <StatCard label="Boards Actifs" value={stats?.activeBoards} icon={Layers} color="text-violet-400" />
+              <StatCard label="Dépôts en attente" value={stats?.pendingDeposits} icon={ArrowDownLeft} color="text-yellow-400" />
+              <StatCard label="Retraits en attente" value={stats?.pendingWithdrawals} icon={ArrowUpRight} color="text-red-400" />
+              <StatCard label="Revenus Plateforme" value={`$${(stats?.totalPlatformRevenue || 0).toFixed(2)}`} icon={DollarSign} color="text-emerald-400" />
+              <StatCard label="Volume 7j" value={`$${(stats?.totalVolume7d || 0).toFixed(2)}`} icon={TrendingUp} color="text-blue-400" />
+            </div>
+
+            <div className="rounded-2xl border border-border bg-card/40 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-base font-display font-semibold">Cohérence numérotation / board / evolution</h3>
+                  <p className="text-xs text-muted-foreground">Stats d’audit détaillées + correction auto en un clic.</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={loadConsistency}
+                    disabled={consistencyLoading}
+                    className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:border-primary/40 disabled:opacity-60"
+                  >
+                    {consistencyLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                    Actualiser
+                  </button>
+                  <button
+                    onClick={runAutoConsistencyRepair}
+                    disabled={consistencyRepairing}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                  >
+                    {consistencyRepairing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                    Correction auto
+                  </button>
+                </div>
+              </div>
+
+              {consistencyRepairMessage && (
+                <div className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
+                  {consistencyRepairMessage}
+                </div>
+              )}
+
+              {!consistency ? (
+                <div className="rounded-xl border border-dashed border-border px-4 py-6 text-sm text-muted-foreground">
+                  {consistencyLoading ? 'Chargement de l’audit...' : 'Aucune donnée d’audit chargée.'}
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="rounded-xl border border-border bg-background/40 px-3 py-2"><p className="text-[11px] text-muted-foreground">Actifs (hors admin)</p><p className="text-lg font-semibold">{consistency.counts.activeNonAdmin}</p></div>
+                    <div className="rounded-xl border border-border bg-background/40 px-3 py-2"><p className="text-[11px] text-muted-foreground">Numérotés (hors admin)</p><p className="text-lg font-semibold">{consistency.counts.numberedNonAdmin}</p></div>
+                    <div className="rounded-xl border border-border bg-background/40 px-3 py-2"><p className="text-[11px] text-muted-foreground">Positionnés board (legacy)</p><p className="text-lg font-semibold">{consistency.counts.positionedLegacyNonAdmin}</p></div>
+                    <div className="rounded-xl border border-border bg-background/40 px-3 py-2"><p className="text-[11px] text-muted-foreground">Affichés Evolution</p><p className="text-lg font-semibold">{consistency.counts.evolutionDisplayedGraphicalTotal}</p></div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="rounded-xl border border-border bg-background/30 p-3">
+                      <p className="text-xs text-muted-foreground mb-2">Répartition Evolution par niveau</p>
+                      <div className="grid grid-cols-4 gap-2">
+                        {Object.entries(consistency.evolutionByBoard).map(([board, c]) => (
+                          <div key={board} className="rounded-lg border border-border px-2 py-1.5 text-center">
+                            <p className="text-[10px] text-muted-foreground">Board {board}</p>
+                            <p className="text-sm font-semibold">{c}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="rounded-xl border border-border bg-background/30 p-3">
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Anomalies détectées ({consistency.anomalies.length})
+                      </p>
+                      <div className="max-h-40 overflow-auto space-y-1">
+                        {consistency.anomalies.length === 0 && (
+                          <p className="text-xs text-primary">Aucune incohérence détectée.</p>
+                        )}
+                        {consistency.anomalies.slice(0, 20).map((a) => (
+                          <div key={a.id} className="rounded-lg border border-border px-2 py-1.5 text-xs">
+                            <span className="font-medium">@{a.username}</span> · #{a.accountNumber ?? '—'} · Board {a.currentBoard ?? '—'}
+                            <p className="text-muted-foreground">{a.flags.join(', ')}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-red-500/30 bg-red-500/5 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-base font-display font-semibold text-red-300">Réinitialisation plateforme</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Supprime toutes les données opérationnelles et conserve uniquement les comptes <span className="font-medium">admin</span> et <span className="font-medium">ceo</span>.
+                  </p>
+                </div>
+                <button
+                  onClick={loadPlatformResetStatus}
+                  disabled={platformResetLoading}
+                  className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs hover:border-primary/40 disabled:opacity-60"
+                >
+                  {platformResetLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  Statut PIN
+                </button>
+              </div>
+
+              <div className="rounded-xl border border-border bg-background/30 p-3 text-xs">
+                <p>
+                  PIN configuré: <span className={platformResetStatus?.hasPin ? 'text-emerald-400 font-medium' : 'text-yellow-300 font-medium'}>
+                    {platformResetStatus?.hasPin ? 'Oui' : 'Non'}
+                  </span>
+                </p>
+                {platformResetStatus?.pinConfiguredAt && (
+                  <p className="text-muted-foreground mt-1">
+                    Dernière définition: {new Date(platformResetStatus.pinConfiguredAt).toLocaleString('fr-FR')}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="rounded-xl border border-border bg-background/30 p-3 space-y-2">
+                  <p className="text-xs font-medium">Définir / changer PIN (4 chiffres)</p>
+                  {platformResetStatus?.hasPin && (
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      maxLength={4}
+                      value={platformResetCurrentPin}
+                      onChange={(e) => setPlatformResetCurrentPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                      placeholder="PIN actuel"
+                      className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm"
+                    />
+                  )}
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={platformResetPin}
+                    onChange={(e) => setPlatformResetPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="Nouveau PIN (4 chiffres)"
+                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm"
+                  />
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={platformResetConfirmPin}
+                    onChange={(e) => setPlatformResetConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="Confirmer le PIN"
+                    className="w-full bg-background border border-border rounded-lg px-3 py-2 text-sm"
+                  />
+                  <button
+                    onClick={savePlatformResetPin}
+                    disabled={platformResetPinBusy}
+                    className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-xs font-medium text-primary-foreground disabled:opacity-60"
+                  >
+                    {platformResetPinBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle className="w-3.5 h-3.5" />}
+                    Enregistrer PIN
+                  </button>
+                </div>
+
+                <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-3 space-y-2">
+                  <p className="text-xs font-medium text-red-200">Exécuter la réinitialisation complète</p>
+                  <input
+                    type="password"
+                    inputMode="numeric"
+                    maxLength={4}
+                    value={platformResetExecutePin}
+                    onChange={(e) => setPlatformResetExecutePin(e.target.value.replace(/\D/g, '').slice(0, 4))}
+                    placeholder="PIN de confirmation"
+                    className="w-full bg-background border border-red-400/40 rounded-lg px-3 py-2 text-sm"
+                  />
+                  <button
+                    onClick={executePlatformHardReset}
+                    disabled={platformResetBusy || !platformResetStatus?.hasPin}
+                    className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-3 py-2 text-xs font-medium text-white disabled:opacity-60"
+                  >
+                    {platformResetBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                    Réinitialiser la base
+                  </button>
+                  {!platformResetStatus?.hasPin && (
+                    <p className="text-[11px] text-yellow-300">Définissez d’abord le PIN de réinitialisation.</p>
+                  )}
+                </div>
+              </div>
+
+              {platformResetMessage && (
+                <div className="rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 text-xs text-primary">
+                  {platformResetMessage}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -426,6 +935,18 @@ export default function AdminPage() {
                 <option value="ACTIVE">Actif</option>
                 <option value="SUSPENDED">Suspendu</option>
               </select>
+              <button
+                onClick={() => setCreateUserOpen(true)}
+                className="px-3 py-2 rounded-xl border border-primary/40 bg-primary/10 text-primary text-sm font-medium hover:bg-primary/20 transition"
+              >
+                + Ajouter compte
+              </button>
+              <button
+                onClick={runQueueSync}
+                className="px-3 py-2 rounded-xl border border-border bg-card text-sm font-medium hover:border-primary/40 transition"
+              >
+                Sync numéros
+              </button>
             </div>
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card/30 px-3 py-2">
               <button
@@ -870,6 +1391,14 @@ export default function AdminPage() {
           userId={adjustingUser.id}
           username={adjustingUser.username}
           onClose={() => setAdjustingUser(null)}
+        />
+      )}
+
+      {createUserOpen && (
+        <CreateUserModal
+          token={token}
+          onClose={() => setCreateUserOpen(false)}
+          onCreated={() => queryClient.invalidateQueries()}
         />
       )}
 

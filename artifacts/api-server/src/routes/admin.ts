@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import bcrypt from "bcryptjs";
 import { db } from "@workspace/db";
 import {
   usersTable,
@@ -26,6 +27,7 @@ import {
   adjustAvailableWithTreasury,
   creditAvailableFromTreasury,
   ensureLedgerInfra,
+  ensureWalletAndLedgerAccounts,
   releaseBlockedToAvailable,
   settleBlockedToTreasury,
 } from "../lib/ledger.js";
@@ -38,11 +40,150 @@ import {
 } from "../services/moncash.js";
 import { getCryptoWithdrawMode } from "../services/crypto-provider.js";
 import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
+import { invalidateSystemConfigCache } from "../services/system-config.js";
+import { BOARD_ORDER, backfillValidatedQueueNumbers, computeStrategicLeafNumbers, evaluateBoardProgressions, fetchValidatedAccounts } from "../services/board-network.js";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const isValidId = (id: string) => UUID_RE.test(id);
+
+const EVOLUTION_ALLOWED_KEYS = new Set([
+  "entry_fee_usd",
+  "min_deposit_usd",
+  "kyc_on_withdraw_only",
+  "enable_sms_otp",
+  "enable_whatsapp_otp",
+  "enable_auto_withdraw_crypto",
+  "maintenance_mode",
+  "board_auto_progression",
+  "board_min_direct_referrals",
+  "ceo_bootstrap_full_board_f_required",
+  "board_force_tools_enabled",
+  "deposit_methods_enabled",
+  "withdraw_methods_enabled",
+  "board_referral_bonus",
+  "board_financials",
+]);
+
+const NOTIF_LINK_DOMAIN_TO_KEY = {
+  sms_otp: "notif_sms_otp",
+  email_otp: "notif_email_otp",
+  email_verification: "notif_email_verification",
+  email_notif: "notif_email_notification",
+  referral_link: "notif_referral_link",
+} as const;
+
+const NOTIF_LINK_DEFAULTS: Record<(typeof NOTIF_LINK_DOMAIN_TO_KEY)[keyof typeof NOTIF_LINK_DOMAIN_TO_KEY], unknown> = {
+  notif_sms_otp: {
+    body: "Ecrossflow • Code securite: {{otp}} • Expire dans {{minutes}} min. Ne le partagez jamais.",
+  },
+  notif_email_otp: {
+    subject: "Votre code de securite Ecrossflow",
+    bodyHtml: "<h2>Code de verification</h2><p>Utilisez ce code pour valider votre action:</p><p><strong style='font-size:24px'>{{otp}}</strong></p><p>Validite: {{minutes}} minutes.</p><p>Si vous n etes pas a l origine de cette demande, ignorez ce message.</p>",
+  },
+  notif_email_verification: {
+    subject: "Activez votre compte Ecrossflow",
+    bodyHtml: "<h2>Confirmez votre email</h2><p>Votre compte est presque pret.</p><p><a href='{{verification_link}}'>Confirmer mon compte</a></p><p>Si le bouton ne fonctionne pas, copiez ce lien: {{verification_link}}</p>",
+  },
+  notif_email_notification: {
+    subject: "Compte active avec succes",
+    bodyHtml: "<h2>Activation confirmee</h2><p>Votre compte est actif.</p><p>Etape suivante: rechargez votre wallet avec au moins {{min_deposit_usd}} USD pour commencer.</p>",
+  },
+  notif_referral_link: {
+    baseUrl: "https://ecrossflow.com",
+    registerPath: "/auth/register",
+    queryParam: "ref",
+    whatsappTemplate: "Bonjour 👋 Rejoins {{app_name}} avec mon code {{referral_code}} et commence ici: {{referral_link}}",
+    telegramTemplate: "🚀 Rejoins {{app_name}} | Code: {{referral_code}} | Lien: {{referral_link}}",
+    genericTemplate: "Rejoins {{app_name}} avec mon code {{referral_code}}: {{referral_link}}",
+  },
+};
+
+const PLATFORM_RESET_PIN_KEY = "platform_reset_pin_hash";
+const NOTIF_LINK_SETTING_KEYS = Object.values(NOTIF_LINK_DOMAIN_TO_KEY);
+const PLATFORM_RESET_TABLES = [
+  "board_participants",
+  "board_instances",
+  "bonuses",
+  "referrals",
+  "notifications",
+  "otp_codes",
+  "payment_events",
+  "wallet_audit_logs",
+  "deposits",
+  "withdrawals",
+  "ledger_entries",
+  "transactions",
+  "user_wallets",
+  "internal_wallet_balances",
+  "wallets",
+  "i18n_audit_logs",
+];
+type SqlExecutor = { execute: typeof db.execute };
+
+let evolutionInfraReady = false;
+let evolutionInfraPromise: Promise<void> | null = null;
+
+async function ensureEvolutionInfra(): Promise<void> {
+  if (evolutionInfraReady) return;
+  if (evolutionInfraPromise) return evolutionInfraPromise;
+  evolutionInfraPromise = (async () => {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS system_settings (
+        key varchar(80) PRIMARY KEY,
+        value jsonb NOT NULL,
+        updated_by uuid REFERENCES users(id) ON DELETE SET NULL,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS system_settings_audit (
+        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+        key varchar(80) NOT NULL,
+        old_value jsonb,
+        new_value jsonb NOT NULL,
+        changed_by uuid REFERENCES users(id) ON DELETE SET NULL,
+        created_at timestamptz NOT NULL DEFAULT now()
+      );
+    `);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_system_settings_audit_created ON system_settings_audit(created_at DESC);`);
+    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_system_settings_audit_key ON system_settings_audit(key);`);
+
+    await db.execute(sql`
+      INSERT INTO system_settings (key, value) VALUES
+        ('entry_fee_usd', '2'),
+        ('min_deposit_usd', '2'),
+        ('kyc_on_withdraw_only', 'true'),
+        ('enable_sms_otp', 'true'),
+        ('enable_whatsapp_otp', 'false'),
+        ('enable_auto_withdraw_crypto', 'false'),
+        ('maintenance_mode', 'false'),
+        ('board_auto_progression', 'true'),
+        ('board_min_direct_referrals', '2'),
+        ('ceo_bootstrap_full_board_f_required', 'true'),
+        ('board_force_tools_enabled', 'true'),
+        ('deposit_methods_enabled', '["MONCASH","NATCASH","BANK_TRANSFER","CARD","CRYPTO"]'),
+        ('withdraw_methods_enabled', '["MONCASH","NATCASH","BANK_TRANSFER","CRYPTO"]'),
+        ('board_referral_bonus', '{"F":0.5,"E":0.25,"D":0.25,"C":0.25,"B":0.062,"A":0.062,"S":0.062}'),
+        ('board_financials', '{"F":{"entryFee":2,"totalGain":16,"nextBoardDeduction":10,"withdrawable":4},"E":{"entryFee":10,"totalGain":80,"nextBoardDeduction":50,"withdrawable":20},"D":{"entryFee":50,"totalGain":400,"nextBoardDeduction":200,"withdrawable":150},"C":{"entryFee":200,"totalGain":1600,"nextBoardDeduction":800,"withdrawable":600},"B":{"entryFee":800,"totalGain":6400,"nextBoardDeduction":3200,"withdrawable":2400},"A":{"entryFee":3200,"totalGain":25600,"nextBoardDeduction":12800,"withdrawable":9600},"S":{"entryFee":12800,"totalGain":102400,"nextBoardDeduction":51200,"withdrawable":50000}}')
+      ON CONFLICT (key) DO NOTHING;
+    `);
+    for (const [k, v] of Object.entries(NOTIF_LINK_DEFAULTS)) {
+      await db.execute(sql`
+        INSERT INTO system_settings (key, value)
+        VALUES (${k}, ${JSON.stringify(v)}::jsonb)
+        ON CONFLICT (key) DO NOTHING;
+      `);
+    }
+    evolutionInfraReady = true;
+  })();
+  try {
+    await evolutionInfraPromise;
+  } finally {
+    evolutionInfraPromise = null;
+  }
+}
 
 function parseDestination(metadata: unknown, description: string | null): string {
   if (metadata && typeof metadata === "object" && "destination" in metadata) {
@@ -56,9 +197,796 @@ function parseDestination(metadata: unknown, description: string | null): string
   return "";
 }
 
+function computeStrategicTree(n1: number) {
+  const n2 = n1 * 2;
+  const n3 = n1 * 2 + 1;
+  const n4 = n3 * 2;
+  const n5 = n3 * 2 + 1;
+  const n6 = n2 * 2 + 1;
+  const n7 = n2 * 2;
+  const n8 = n6 * 2 + 1;
+  const n9 = n6 * 2;
+  const n10 = n7 * 2 + 1;
+  const n11 = n7 * 2;
+  return { n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, n11 };
+}
+
+async function readPlatformResetPinHash(executor: SqlExecutor): Promise<string | null> {
+  const rows = await executor.execute(sql`
+    SELECT value
+    FROM system_settings
+    WHERE key = ${PLATFORM_RESET_PIN_KEY}
+    LIMIT 1
+  `);
+  const value = (rows as unknown as { rows?: Array<{ value: unknown }> }).rows?.[0]?.value;
+  if (typeof value === "string" && value.trim()) return value;
+  return null;
+}
+
+async function truncateTableIfExists(executor: SqlExecutor, tableName: string): Promise<void> {
+  await executor.execute(sql.raw(`TRUNCATE TABLE IF EXISTS ${tableName} RESTART IDENTITY CASCADE;`));
+}
+
+async function executePlatformHardReset(actorUserId: string | null): Promise<{ keptUsers: number; deletedUsers: number }> {
+  await ensureEvolutionInfra();
+  await ensureLedgerInfra();
+
+  return db.transaction(async (tx) => {
+    const protectedRows = await tx.execute(sql<{ id: string; username: string }>`
+      SELECT id, LOWER(username) AS username
+      FROM users
+      WHERE LOWER(username) IN ('admin', 'ceo')
+    `);
+    const protectedUsers = (protectedRows as unknown as { rows?: Array<{ id: string; username: string }> }).rows || [];
+    const adminUser = protectedUsers.find((u) => u.username === "admin");
+    const ceoUser = protectedUsers.find((u) => u.username === "ceo");
+    if (!adminUser || !ceoUser) {
+      throw new Error("PROTECTED_USERS_MISSING");
+    }
+
+    const [{ count: beforeUserCount }] = await tx.select({ count: count() }).from(usersTable);
+
+    for (const tableName of PLATFORM_RESET_TABLES) {
+      await truncateTableIfExists(tx as unknown as SqlExecutor, tableName);
+    }
+
+    await tx.execute(sql`DELETE FROM ledger_accounts WHERE user_id IS NOT NULL`);
+
+    await tx.execute(sql`
+      DELETE FROM users
+      WHERE id <> ${adminUser.id}
+        AND id <> ${ceoUser.id}
+    `);
+
+    await tx.update(usersTable)
+      .set({
+        status: "ACTIVE",
+        role: "ADMIN",
+        accountNumber: 0,
+        currentBoard: "F",
+        kycStatus: "NONE",
+        referredBy: null,
+        googleId: null,
+        phone: null,
+        avatarUrl: null,
+        activatedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(usersTable.id, adminUser.id));
+
+    await tx.update(usersTable)
+      .set({
+        status: "ACTIVE",
+        role: "USER",
+        accountNumber: null,
+        currentBoard: null,
+        kycStatus: "NONE",
+        referredBy: null,
+        googleId: null,
+        phone: null,
+        avatarUrl: null,
+        activatedAt: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(usersTable.id, ceoUser.id));
+
+    await tx.execute(sql`
+      INSERT INTO wallets (user_id, balance_usd, balance_pending, balance_reserved, updated_at)
+      VALUES
+        (${adminUser.id}, '0', '0', '0', now()),
+        (${ceoUser.id}, '0', '0', '0', now())
+      ON CONFLICT (user_id) DO UPDATE
+      SET balance_usd = '0',
+          balance_pending = '0',
+          balance_reserved = '0',
+          updated_at = now()
+    `);
+
+    await tx.execute(sql`
+      INSERT INTO internal_wallet_balances (user_id, available_balance, pending_balance, locked_balance, updated_at)
+      VALUES
+        (${adminUser.id}, '0', '0', '0', now()),
+        (${ceoUser.id}, '0', '0', '0', now())
+      ON CONFLICT (user_id) DO UPDATE
+      SET available_balance = '0',
+          pending_balance = '0',
+          locked_balance = '0',
+          updated_at = now()
+    `);
+
+    await tx.execute(sql`
+      DO $$
+      BEGIN
+        IF to_regclass('public.investor_queue_seq') IS NOT NULL THEN
+          PERFORM setval('investor_queue_seq', 2, false);
+        END IF;
+      END
+      $$;
+    `);
+
+    await tx.execute(sql`DELETE FROM system_settings WHERE key = ${PLATFORM_RESET_PIN_KEY}`);
+    await tx.execute(sql`
+      INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+      VALUES (
+        'platform_hard_reset',
+        NULL,
+        jsonb_build_object('at', now(), 'by', ${actorUserId}, 'scope', 'FULL_DB'),
+        ${actorUserId}
+      )
+    `);
+
+    invalidateSystemConfigCache();
+
+    const [{ count: afterUserCount }] = await tx.select({ count: count() }).from(usersTable);
+    return {
+      keptUsers: Number(afterUserCount),
+      deletedUsers: Number(beforeUserCount) - Number(afterUserCount),
+    };
+  });
+}
+
+type ConsistencyAuditRow = {
+  id: string;
+  username: string;
+  status: "PENDING" | "ACTIVE" | "SUSPENDED";
+  accountNumber: number | null;
+  currentBoard: string | null;
+  hasCompletedDeposit: boolean;
+  hasCompletedBoardPaymentF: boolean;
+  hasCompletedBoardPaymentAny: boolean;
+};
+
+async function buildEvolutionConsistencySnapshot() {
+  const [activeAll] = await db.select({ c: count() }).from(usersTable).where(eq(usersTable.status, "ACTIVE"));
+  const [activeNonAdmin] = await db.select({ c: count() }).from(usersTable).where(and(eq(usersTable.status, "ACTIVE"), sql`${usersTable.role} <> 'ADMIN'`));
+
+  const numberedAllRows = await db.execute(sql<{ c: number }>`
+    SELECT COUNT(*)::int AS c
+    FROM users
+    WHERE account_number IS NOT NULL;
+  `);
+  const numberedNonAdminRows = await db.execute(sql<{ c: number }>`
+    SELECT COUNT(*)::int AS c
+    FROM users
+    WHERE role <> 'ADMIN'
+      AND account_number IS NOT NULL
+      AND account_number > 0;
+  `);
+  const numberedActiveNonAdminRows = await db.execute(sql<{ c: number }>`
+    SELECT COUNT(*)::int AS c
+    FROM users
+    WHERE role <> 'ADMIN'
+      AND status = 'ACTIVE'
+      AND account_number IS NOT NULL
+      AND account_number > 0;
+  `);
+  const usersWithCurrentBoardRows = await db.execute(sql<{ c: number }>`
+    SELECT COUNT(*)::int AS c
+    FROM users
+    WHERE role <> 'ADMIN'
+      AND current_board IS NOT NULL;
+  `);
+  const positionedLegacyRows = await db.execute(sql<{ c: number }>`
+    SELECT COUNT(DISTINCT u.id)::int AS c
+    FROM users u
+    WHERE u.role <> 'ADMIN'
+      AND (
+        u.id IN (SELECT bp.user_id FROM board_participants bp)
+        OR u.id IN (SELECT bi.ranker_id FROM board_instances bi WHERE bi.ranker_id IS NOT NULL)
+      );
+  `);
+
+  const validated = await fetchValidatedAccounts();
+  const validatedByBoard = BOARD_ORDER.reduce<Record<string, number>>((acc, boardId) => {
+    acc[boardId] = validated.filter((u) => (u.currentBoard || "F").toUpperCase() === boardId).length;
+    return acc;
+  }, {});
+  const validatedIdSet = new Set(validated.map((u) => u.id));
+
+  const auditRowsRaw = await db.execute(sql<ConsistencyAuditRow>`
+    SELECT
+      u.id,
+      u.username,
+      u.status,
+      u.account_number AS "accountNumber",
+      u.current_board AS "currentBoard",
+      EXISTS (
+        SELECT 1
+        FROM transactions d
+        WHERE d.user_id = u.id
+          AND d.type = 'DEPOSIT'
+          AND d.status = 'COMPLETED'
+      ) AS "hasCompletedDeposit",
+      EXISTS (
+        SELECT 1
+        FROM transactions p
+        WHERE p.user_id = u.id
+          AND p.type = 'BOARD_PAYMENT'
+          AND p.status = 'COMPLETED'
+          AND (
+            p.from_board = 'F'
+            OR COALESCE(p.description, '') ILIKE '%board F%'
+          )
+      ) AS "hasCompletedBoardPaymentF",
+      EXISTS (
+        SELECT 1
+        FROM transactions p2
+        WHERE p2.user_id = u.id
+          AND p2.type = 'BOARD_PAYMENT'
+          AND p2.status = 'COMPLETED'
+      ) AS "hasCompletedBoardPaymentAny"
+    FROM users u
+    WHERE u.role <> 'ADMIN'
+      AND u.status = 'ACTIVE'
+    ORDER BY COALESCE(u.account_number, 2147483647) ASC, u.created_at ASC;
+  `);
+  const auditRows = (auditRowsRaw as unknown as { rows?: ConsistencyAuditRow[] }).rows || [];
+
+  const anomalies = auditRows.map((row) => {
+    const reasons: string[] = [];
+    if (!row.accountNumber || row.accountNumber <= 0) reasons.push("NOT_NUMBERED");
+    if (!row.hasCompletedDeposit) reasons.push("MISSING_COMPLETED_DEPOSIT");
+    if (!row.hasCompletedBoardPaymentAny) reasons.push("MISSING_COMPLETED_BOARD_PAYMENT");
+    if (row.currentBoard && !row.hasCompletedBoardPaymentAny) reasons.push("STALE_CURRENT_BOARD");
+    if (row.accountNumber && !validatedIdSet.has(row.id)) reasons.push("NOT_IN_EVOLUTION_VALIDATED_SET");
+    return {
+      id: row.id,
+      username: row.username,
+      accountNumber: row.accountNumber,
+      currentBoard: row.currentBoard,
+      flags: reasons,
+    };
+  }).filter((x) => x.flags.length > 0);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    counts: {
+      activeAll: Number(activeAll?.c || 0),
+      activeNonAdmin: Number(activeNonAdmin?.c || 0),
+      numberedAll: Number((numberedAllRows as unknown as { rows?: Array<{ c: number }> }).rows?.[0]?.c || 0),
+      numberedNonAdmin: Number((numberedNonAdminRows as unknown as { rows?: Array<{ c: number }> }).rows?.[0]?.c || 0),
+      numberedActiveNonAdmin: Number((numberedActiveNonAdminRows as unknown as { rows?: Array<{ c: number }> }).rows?.[0]?.c || 0),
+      usersWithCurrentBoardNonAdmin: Number((usersWithCurrentBoardRows as unknown as { rows?: Array<{ c: number }> }).rows?.[0]?.c || 0),
+      positionedLegacyNonAdmin: Number((positionedLegacyRows as unknown as { rows?: Array<{ c: number }> }).rows?.[0]?.c || 0),
+      evolutionValidatedTotal: validated.length,
+      evolutionDisplayedGraphicalTotal: validated.length,
+    },
+    evolutionByBoard: validatedByBoard,
+    anomalies,
+  };
+}
+
+router.get("/admin/evolution/overview", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const [usersCount] = await db.select({ c: count() }).from(usersTable);
+  const [activeUsersCount] = await db.select({ c: count() }).from(usersTable).where(eq(usersTable.status, "ACTIVE"));
+  const [walletsCount] = await db.select({ c: count() }).from(walletsTable);
+  const [boardsCount] = await db.select({ c: count() }).from(boardInstancesTable);
+  const [pendingDep] = await db.select({ c: count() }).from(transactionsTable).where(and(eq(transactionsTable.type, "DEPOSIT"), eq(transactionsTable.status, "PENDING")));
+  const [pendingWdr] = await db.select({ c: count() }).from(transactionsTable).where(and(eq(transactionsTable.type, "WITHDRAWAL"), or(eq(transactionsTable.status, "PENDING"), eq(transactionsTable.status, "PROCESSING"))));
+
+  const twilioConfigured = Boolean(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_PHONE);
+  const smtpConfigured = Boolean(process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS);
+  const circleConfigured = String(process.env.CIRCLE_ENABLED || "").toLowerCase() === "true";
+
+  res.json({
+    kpi: {
+      users: Number(usersCount.c),
+      activeUsers: Number(activeUsersCount.c),
+      wallets: Number(walletsCount.c),
+      boards: Number(boardsCount.c),
+      pendingDeposits: Number(pendingDep.c),
+      pendingWithdrawals: Number(pendingWdr.c),
+    },
+    modules: [
+      { code: "USER_MGMT", label: "User Management", status: "live", note: "CRUD, activation, suspension, bulk actions" },
+      { code: "WALLET_ENGINE", label: "Wallet Engine", status: circleConfigured ? "live" : "partial", note: "Internal ledger + custodial crypto provider" },
+      { code: "BOARD_ENGINE", label: "Board/Cycle Engine", status: "live", note: "Progression, payments, board instances" },
+      { code: "NOTIFICATION_CENTER", label: "Notification Center", status: smtpConfigured ? "live" : "partial", note: `Email ${smtpConfigured ? "OK" : "missing"} · SMS ${twilioConfigured ? "OK" : "missing"}` },
+      { code: "SYSTEM_CONFIG", label: "System Config", status: "live", note: "Runtime config + audit trail" },
+      { code: "CONTENT_BUILDER", label: "Content & i18n", status: "partial", note: "i18n runtime in place, visual builder pending" },
+      { code: "AUTOMATION", label: "Automation Engine", status: "planned", note: "BullMQ/Redis scheduling pending" },
+      { code: "REALTIME", label: "Real-time Monitoring", status: "planned", note: "WebSocket/Socket.io pending" },
+    ],
+  });
+});
+
+router.get("/admin/evolution/config", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const rows = await db.execute(sql`
+    SELECT key, value, updated_at, updated_by
+    FROM system_settings
+    WHERE key <> ${PLATFORM_RESET_PIN_KEY}
+      AND key NOT LIKE 'notif_%'
+    ORDER BY key ASC
+  `);
+  const settings = (rows as unknown as { rows?: Array<{ key: string; value: unknown; updated_at: string; updated_by: string | null }> }).rows || [];
+  res.json({ settings });
+});
+
+router.put("/admin/evolution/config/:key", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const key = String(req.params.key || "").trim();
+  if (!EVOLUTION_ALLOWED_KEYS.has(key)) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported config key" });
+    return;
+  }
+  if (typeof req.body?.value === "undefined") {
+    res.status(400).json({ error: "Bad Request", message: "value is required" });
+    return;
+  }
+  const value = req.body.value as unknown;
+  const actor = req.userId || null;
+
+  const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = ${key} LIMIT 1`);
+  const oldValue = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES (${key}, ${JSON.stringify(value)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();
+  `);
+
+  if (key === "entry_fee_usd") {
+    const fee = typeof value === "number" ? value : parseFloat(String(value));
+    if (Number.isFinite(fee) && fee > 0) {
+      await db.update(boardsTable)
+        .set({
+          entryFee: fee.toFixed(2),
+          totalGain: (fee * 8).toFixed(2),
+          nextBoardDeduction: fee.toFixed(2),
+          withdrawable: (fee * 7).toFixed(2),
+        })
+        .where(eq(boardsTable.id, "F"));
+    }
+  }
+
+  if (key === "board_financials" && value && typeof value === "object") {
+    const asRecord = value as Record<string, unknown>;
+    for (const [boardId, cfg] of Object.entries(asRecord)) {
+      const c = cfg as Record<string, unknown>;
+      const entryFee = Number.parseFloat(String(c.entryFee ?? ""));
+      const totalGain = Number.parseFloat(String(c.totalGain ?? ""));
+      const nextBoardDeduction = Number.parseFloat(String(c.nextBoardDeduction ?? ""));
+      const withdrawable = Number.parseFloat(String(c.withdrawable ?? ""));
+      if (!Number.isFinite(entryFee) || !Number.isFinite(totalGain) || !Number.isFinite(nextBoardDeduction) || !Number.isFinite(withdrawable)) {
+        continue;
+      }
+      await db.update(boardsTable)
+        .set({
+          entryFee: entryFee.toFixed(2),
+          totalGain: totalGain.toFixed(2),
+          nextBoardDeduction: nextBoardDeduction.toFixed(2),
+          withdrawable: withdrawable.toFixed(2),
+        })
+        .where(eq(boardsTable.id, boardId.toUpperCase()));
+    }
+  }
+
+  await db.execute(sql`
+    INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+    VALUES (${key}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(value)}::jsonb, ${actor});
+  `);
+  invalidateSystemConfigCache();
+  res.json({ message: "Config updated", key, value });
+});
+
+router.get("/admin/evolution/audit", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || "50"), 10) || 50));
+  const rows = await db.execute(sql`
+    SELECT a.id, a.key, a.old_value, a.new_value, a.changed_by, a.created_at, u.username AS actor_username
+    FROM system_settings_audit a
+    LEFT JOIN users u ON u.id = a.changed_by
+    WHERE a.key <> ${PLATFORM_RESET_PIN_KEY}
+      AND a.key NOT LIKE 'notif_%'
+    ORDER BY a.created_at DESC
+    LIMIT ${limit}
+  `);
+  const audit = (rows as unknown as { rows?: unknown[] }).rows || [];
+  res.json({ audit });
+});
+
+router.get("/admin/evolution/board-path/:accountNumber", requireAdmin as never, async (req: AuthRequest, res) => {
+  const accountNumber = parseInt(String(req.params.accountNumber || "0"), 10);
+  if (!Number.isFinite(accountNumber) || accountNumber <= 0) {
+    res.status(400).json({ error: "Bad Request", message: "Invalid account number" });
+    return;
+  }
+  const tree = computeStrategicTree(accountNumber);
+  res.json({
+    accountNumber,
+    strategy: tree,
+    notes: {
+      starterPairBranch: ["n4", "n5"],
+      challengerPairBranch: ["n6", "n7"],
+      upperBranch: ["n8", "n9", "n10", "n11"],
+    },
+  });
+});
+
+router.post("/admin/evolution/queue/sync", requireAdmin as never, async (_req: AuthRequest, res) => {
+  const assigned = await backfillValidatedQueueNumbers();
+  const validated = await fetchValidatedAccounts();
+  res.json({
+    message: "Queue synchronization completed",
+    assigned,
+    totalValidated: validated.length,
+    preview: validated.slice(0, 20).map((u) => ({
+      id: u.id,
+      username: u.username,
+      accountNumber: u.accountNumber,
+      currentBoard: u.currentBoard,
+    })),
+  });
+});
+
+router.get("/admin/evolution/consistency", requireAdmin as never, async (_req: AuthRequest, res) => {
+  const snapshot = await buildEvolutionConsistencySnapshot();
+  res.json(snapshot);
+});
+
+router.post("/admin/evolution/consistency/repair", requireAdmin as never, async (_req: AuthRequest, res) => {
+  const before = await buildEvolutionConsistencySnapshot();
+  const assigned = await backfillValidatedQueueNumbers();
+
+  const normalizedBoardRows = await db.execute(sql<{ id: string }>`
+    UPDATE users u
+    SET current_board = 'F'
+    WHERE u.role <> 'ADMIN'
+      AND u.account_number IS NOT NULL
+      AND u.account_number > 0
+      AND u.current_board IS NULL
+    RETURNING u.id;
+  `);
+  const normalizedBoards = ((normalizedBoardRows as unknown as { rows?: Array<{ id: string }> }).rows || []).length;
+
+  const clearedStaleRows = await db.execute(sql<{ id: string }>`
+    UPDATE users u
+    SET current_board = NULL
+    WHERE u.role <> 'ADMIN'
+      AND u.account_number IS NULL
+      AND u.current_board IS NOT NULL
+      AND NOT EXISTS (
+        SELECT 1
+        FROM transactions p
+        WHERE p.user_id = u.id
+          AND p.type = 'BOARD_PAYMENT'
+          AND p.status = 'COMPLETED'
+      )
+    RETURNING u.id;
+  `);
+  const clearedStaleBoards = ((clearedStaleRows as unknown as { rows?: Array<{ id: string }> }).rows || []).length;
+
+  const promoted = await evaluateBoardProgressions(db as never);
+  const after = await buildEvolutionConsistencySnapshot();
+
+  res.json({
+    message: "Automatic consistency repair completed",
+    actions: {
+      assignedQueueNumbers: assigned,
+      normalizedBoards,
+      clearedStaleBoards,
+      promotedUsers: promoted,
+    },
+    before,
+    after,
+  });
+});
+
+router.get("/admin/evolution/board-flow", requireAdmin as never, async (req: AuthRequest, res) => {
+  const boardId = String(req.query.boardId || "F").toUpperCase();
+  const limit = Math.min(20, Math.max(1, parseInt(String(req.query.limit || "8"), 10) || 8));
+
+  const validated = await fetchValidatedAccounts();
+  const roots = validated
+    .filter((u) => (u.currentBoard || "F").toUpperCase() === boardId)
+    .sort((a, b) => a.accountNumber - b.accountNumber)
+    .slice(0, limit);
+
+  const byNumber = new Map(validated.map((u) => [u.accountNumber, u]));
+
+  const mapped = roots.map((root) => {
+    const numbers = computeStrategicLeafNumbers(root.accountNumber);
+    const slots = [
+      { slot: "N6*2+1", stage: "STARTER", strategicNumber: numbers.n8 },
+      { slot: "N6*2", stage: "STARTER", strategicNumber: numbers.n9 },
+      { slot: "N7*2+1", stage: "STARTER", strategicNumber: numbers.n10 },
+      { slot: "N7*2", stage: "STARTER", strategicNumber: numbers.n11 },
+      { slot: "N6", stage: "CHALLENGER", strategicNumber: numbers.n6 },
+      { slot: "N7", stage: "CHALLENGER", strategicNumber: numbers.n7 },
+      { slot: "N2", stage: "LEADER", strategicNumber: numbers.n2 },
+      { slot: "N1", stage: "RANKER", strategicNumber: numbers.n1 },
+      { slot: "N3", stage: "LEADER", strategicNumber: numbers.n3 },
+      { slot: "N4", stage: "CHALLENGER", strategicNumber: numbers.n4 },
+      { slot: "N5", stage: "CHALLENGER", strategicNumber: numbers.n5 },
+      { slot: "N4*2", stage: "STARTER", strategicNumber: numbers.n4_2 },
+      { slot: "N4*2+1", stage: "STARTER", strategicNumber: numbers.n4_2p1 },
+      { slot: "N5*2", stage: "STARTER", strategicNumber: numbers.n5_2 },
+      { slot: "N5*2+1", stage: "STARTER", strategicNumber: numbers.n5_2p1 },
+    ];
+
+    const nodes = slots.map((slot) => {
+      const user = byNumber.get(slot.strategicNumber);
+      return {
+        ...slot,
+        role: slot.stage,
+        level: boardId,
+        user: user ? {
+          id: user.id,
+          username: user.username,
+          accountNumber: user.accountNumber,
+          currentBoard: user.currentBoard,
+          status: user.status,
+          stage: slot.stage,
+        } : null,
+      };
+    });
+
+    const starterSlotsFilled = nodes.filter((n) => n.stage === "STARTER" && n.user).length;
+    const coreSlotsFilled = nodes.filter((n) => n.stage !== "STARTER" && n.slot !== "N1" && n.user).length;
+    const totalSlotsFilled = starterSlotsFilled + coreSlotsFilled;
+    return {
+      id: `virtual-${boardId}-${root.accountNumber}`,
+      boardId,
+      instanceNumber: root.accountNumber,
+      status: "ACTIVE",
+      slotsFilled: totalSlotsFilled,
+      starterSlotsFilled,
+      coreSlotsFilled,
+      totalSlotsFilled,
+      createdAt: root.activatedAt || root.createdAt,
+      completedAt: null,
+      rootNumber: root.accountNumber,
+      nodes,
+    };
+  });
+
+  res.json({ boardId, instances: mapped });
+});
+
+router.get("/admin/platform-reset/status", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const rows = await db.execute(sql`
+    SELECT updated_at
+    FROM system_settings
+    WHERE key = ${PLATFORM_RESET_PIN_KEY}
+    LIMIT 1
+  `);
+  const row = (rows as unknown as { rows?: Array<{ updated_at?: string | Date }> }).rows?.[0];
+  res.json({
+    hasPin: Boolean(row),
+    pinConfiguredAt: row?.updated_at || null,
+  });
+});
+
+router.get("/admin/notif-link/config", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const rows = await db.execute(sql`
+    SELECT key, value, updated_at
+    FROM system_settings
+    WHERE key LIKE 'notif_%'
+    ORDER BY key ASC
+  `);
+  const raw = (rows as unknown as { rows?: Array<{ key: string; value: unknown; updated_at: string }> }).rows || [];
+  const byKey = new Map(raw.map((row) => [row.key, row]));
+
+  const domains = Object.entries(NOTIF_LINK_DOMAIN_TO_KEY).reduce<Record<string, { key: string; value: unknown; updatedAt: string | null }>>((acc, [domain, key]) => {
+    const row = byKey.get(key);
+    acc[domain] = {
+      key,
+      value: row?.value ?? NOTIF_LINK_DEFAULTS[key],
+      updatedAt: row?.updated_at ?? null,
+    };
+    return acc;
+  }, {});
+
+  res.json({ domains });
+});
+
+router.put("/admin/notif-link/config/:domain", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const domain = String(req.params.domain || "").trim() as keyof typeof NOTIF_LINK_DOMAIN_TO_KEY;
+  const settingKey = NOTIF_LINK_DOMAIN_TO_KEY[domain];
+  if (!settingKey) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported notification/link domain" });
+    return;
+  }
+  const value = req.body?.value;
+  if (!value || typeof value !== "object") {
+    res.status(400).json({ error: "Bad Request", message: "value object is required" });
+    return;
+  }
+
+  const cfg = value as Record<string, unknown>;
+  if (settingKey === "notif_sms_otp") {
+    const body = String(cfg.body || "").trim();
+    if (!body) {
+      res.status(400).json({ error: "Bad Request", message: "sms_otp.body is required" });
+      return;
+    }
+  }
+  if (settingKey === "notif_email_otp" || settingKey === "notif_email_verification" || settingKey === "notif_email_notification") {
+    const subject = String(cfg.subject || "").trim();
+    const bodyHtml = String(cfg.bodyHtml || "").trim();
+    if (!subject || !bodyHtml) {
+      res.status(400).json({ error: "Bad Request", message: "subject and bodyHtml are required" });
+      return;
+    }
+  }
+  if (settingKey === "notif_referral_link") {
+    const baseUrl = String(cfg.baseUrl || "").trim();
+    const registerPath = String(cfg.registerPath || "").trim();
+    const queryParam = String(cfg.queryParam || "").trim();
+    const whatsappTemplate = String(cfg.whatsappTemplate || "").trim();
+    const telegramTemplate = String(cfg.telegramTemplate || "").trim();
+    const genericTemplate = String(cfg.genericTemplate || "").trim();
+    if (!baseUrl || !registerPath || !queryParam || !whatsappTemplate || !telegramTemplate || !genericTemplate) {
+      res.status(400).json({
+        error: "Bad Request",
+        message: "baseUrl, registerPath, queryParam, whatsappTemplate, telegramTemplate and genericTemplate are required",
+      });
+      return;
+    }
+  }
+
+  const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = ${settingKey} LIMIT 1`);
+  const oldValue = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES (${settingKey}, ${JSON.stringify(value)}::jsonb, ${req.userId || null}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+  `);
+  await db.execute(sql`
+    INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+    VALUES (${settingKey}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(value)}::jsonb, ${req.userId || null})
+  `);
+  invalidateSystemConfigCache();
+
+  res.json({ message: "Notif/Link config updated", domain, key: settingKey, value });
+});
+
+router.post("/admin/notif-link/defaults", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  for (const settingKey of NOTIF_LINK_SETTING_KEYS) {
+    const defaultValue = NOTIF_LINK_DEFAULTS[settingKey];
+    const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = ${settingKey} LIMIT 1`);
+    const oldValue = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+    await db.execute(sql`
+      INSERT INTO system_settings (key, value, updated_by, updated_at)
+      VALUES (${settingKey}, ${JSON.stringify(defaultValue)}::jsonb, ${req.userId || null}, now())
+      ON CONFLICT (key)
+      DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+    `);
+    await db.execute(sql`
+      INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+      VALUES (${settingKey}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(defaultValue)}::jsonb, ${req.userId || null})
+    `);
+  }
+  invalidateSystemConfigCache();
+  res.json({ message: "Exemplary default values applied", domains: Object.keys(NOTIF_LINK_DOMAIN_TO_KEY) });
+});
+
+router.post("/admin/platform-reset/pin", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const pin = String(req.body?.pin || "").trim();
+  const confirmPin = String(req.body?.confirmPin || "").trim();
+  const currentPin = String(req.body?.currentPin || "").trim();
+
+  if (!/^\d{4}$/.test(pin)) {
+    res.status(400).json({ error: "Bad Request", message: "PIN must contain exactly 4 digits" });
+    return;
+  }
+  if (confirmPin && confirmPin !== pin) {
+    res.status(400).json({ error: "Bad Request", message: "PIN confirmation does not match" });
+    return;
+  }
+
+  const existingHash = await readPlatformResetPinHash(db);
+  if (existingHash) {
+    if (!/^\d{4}$/.test(currentPin)) {
+      res.status(400).json({ error: "Bad Request", message: "Current PIN is required to update the reset PIN" });
+      return;
+    }
+    const ok = await bcrypt.compare(currentPin, existingHash);
+    if (!ok) {
+      res.status(403).json({ error: "Forbidden", message: "Current PIN is invalid" });
+      return;
+    }
+  }
+
+  const pinHash = await bcrypt.hash(pin, 12);
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES (${PLATFORM_RESET_PIN_KEY}, ${JSON.stringify(pinHash)}::jsonb, ${req.userId || null}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+  `);
+  invalidateSystemConfigCache();
+
+  res.json({
+    message: existingHash ? "Reset PIN updated successfully" : "Reset PIN configured successfully",
+    hasPin: true,
+  });
+});
+
+router.post("/admin/platform-reset/execute", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const pin = String(req.body?.pin || "").trim();
+  if (!/^\d{4}$/.test(pin)) {
+    res.status(400).json({ error: "Bad Request", message: "PIN must contain exactly 4 digits" });
+    return;
+  }
+
+  const hash = await readPlatformResetPinHash(db);
+  if (!hash) {
+    res.status(409).json({ error: "Conflict", message: "Reset PIN is not configured. Configure it first." });
+    return;
+  }
+
+  const ok = await bcrypt.compare(pin, hash);
+  if (!ok) {
+    res.status(403).json({ error: "Forbidden", message: "Invalid reset PIN" });
+    return;
+  }
+
+  try {
+    const result = await executePlatformHardReset(req.userId || null);
+    res.json({
+      message: "Platform reset completed",
+      keptUsers: result.keptUsers,
+      deletedUsers: result.deletedUsers,
+      pinResetRequired: true,
+    });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : "RESET_FAILED";
+    if (msg === "PROTECTED_USERS_MISSING") {
+      res.status(409).json({
+        error: "Conflict",
+        message: "Protected users admin/ceo are required before running a full reset",
+      });
+      return;
+    }
+    throw error;
+  }
+});
+
 function isProtectedSystemUser(user: { username: string }): boolean {
   const uname = user.username.toLowerCase();
   return uname === "admin" || uname === "ceo";
+}
+
+function generateReferralCode(): string {
+  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let code = "ECF";
+  for (let i = 0; i < 6; i += 1) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
 }
 
 async function hardDeleteUserData(userId: string): Promise<void> {
@@ -281,6 +1209,161 @@ router.get("/admin/users", requireAdmin as never, async (req: AuthRequest, res) 
     total: Number(totalResult.count),
     page: pageNum,
     totalPages: Math.ceil(Number(totalResult.count) / limitNum),
+  });
+});
+
+router.post("/admin/users/create", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const {
+    username,
+    email,
+    firstName,
+    lastName,
+    password,
+    phone,
+    referralCode,
+    initialBalance,
+  } = req.body as {
+    username?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+    password?: string;
+    phone?: string;
+    referralCode?: string;
+    initialBalance?: number | string;
+  };
+
+  const usernameValue = String(username || "").trim();
+  const emailValue = String(email || "").trim().toLowerCase();
+  const firstNameValue = String(firstName || "").trim();
+  const lastNameValue = String(lastName || "").trim();
+  const passwordValue = String(password || "");
+
+  if (!usernameValue || !emailValue || !firstNameValue || !lastNameValue || !passwordValue) {
+    res.status(400).json({ error: "Bad Request", message: "username, email, firstName, lastName and password are required" });
+    return;
+  }
+  if (passwordValue.length < 8) {
+    res.status(400).json({ error: "Bad Request", message: "Password must contain at least 8 characters" });
+    return;
+  }
+
+  const existing = await db.select({ id: usersTable.id })
+    .from(usersTable)
+    .where(or(
+      eq(usersTable.username, usernameValue),
+      eq(usersTable.email, emailValue),
+    ))
+    .limit(1);
+  if (existing.length) {
+    res.status(409).json({ error: "Conflict", message: "Username or email already exists" });
+    return;
+  }
+
+  let referrerId: string | null = null;
+  if (referralCode) {
+    const ref = await db.select({ id: usersTable.id })
+      .from(usersTable)
+      .where(eq(usersTable.referralCode, String(referralCode).trim().toUpperCase()))
+      .limit(1);
+    if (!ref.length) {
+      res.status(400).json({ error: "Bad Request", message: "Invalid referral code" });
+      return;
+    }
+    referrerId = ref[0].id;
+  }
+
+  const initialBalanceNum = Number.parseFloat(String(initialBalance ?? 0));
+  const seedBalance = Number.isFinite(initialBalanceNum) && initialBalanceNum > 0 ? initialBalanceNum : 0;
+  const passwordHash = await bcrypt.hash(passwordValue, 12);
+
+  const created = await db.transaction(async (tx) => {
+    let uniqueCode = generateReferralCode();
+    while (true) {
+      const exists = await tx.select({ id: usersTable.id })
+        .from(usersTable)
+        .where(eq(usersTable.referralCode, uniqueCode))
+        .limit(1);
+      if (!exists.length) break;
+      uniqueCode = generateReferralCode();
+    }
+
+    const [user] = await tx.insert(usersTable).values({
+      firstName: firstNameValue,
+      lastName: lastNameValue,
+      username: usernameValue,
+      email: emailValue,
+      passwordHash,
+      phone: phone ? String(phone).trim() : null,
+      referralCode: uniqueCode,
+      referredBy: referrerId,
+      role: "USER",
+      status: "ACTIVE",
+      currentBoard: "F",
+      activatedAt: new Date(),
+      preferredLanguage: "fr",
+    }).returning({
+      id: usersTable.id,
+      username: usersTable.username,
+      email: usersTable.email,
+      referralCode: usersTable.referralCode,
+    });
+
+    await ensureWalletAndLedgerAccounts(tx, user.id, "USD");
+
+    if (seedBalance > 0) {
+      const [seedTx] = await tx.insert(transactionsTable).values({
+        userId: user.id,
+        type: "SYSTEM_FEE",
+        amount: seedBalance.toFixed(2),
+        currency: "USD",
+        amountUsd: seedBalance.toFixed(2),
+        status: "COMPLETED",
+        paymentMethod: "SYSTEM",
+        adminNote: "Admin initial recharge",
+        description: "Admin initial recharge",
+      }).returning({ id: transactionsTable.id });
+
+      await adjustAvailableWithTreasury(tx, {
+        userId: user.id,
+        deltaUsd: seedBalance,
+        transactionId: seedTx.id,
+        currency: "USD",
+        idempotencyKey: `admin:create-user:seed:${seedTx.id}`,
+        description: "Admin initial recharge",
+        metadata: {
+          source: "ADMIN_CREATE_USER",
+          adminId: req.userId || null,
+        },
+      });
+    }
+
+    if (referrerId) {
+      await tx.insert(referralsTable).values({
+        referrerId,
+        referredId: user.id,
+        bonusPaid: false,
+      }).onConflictDoNothing();
+    }
+
+    await tx.insert(notificationsTable).values({
+      userId: user.id,
+      type: "ACCOUNT_ACTIVATED",
+      title: "Compte créé par l'administration",
+      message: "Votre compte est actif. Connectez-vous pour commencer.",
+      category: "system",
+      actionUrl: "/auth/login",
+      read: false,
+    });
+
+    return user;
+  });
+
+  res.status(201).json({
+    message: "User created successfully",
+    user: created,
+    initialBalance: seedBalance,
   });
 });
 
@@ -555,6 +1638,48 @@ router.post("/admin/users/:id/adjust-balance", requireAdmin as never, async (req
   }
 
   res.json({ message: "Balance adjusted successfully" });
+});
+
+router.post("/admin/users/:id/recharge", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureLedgerInfra();
+  const id = String(req.params.id);
+  const amount = Number.parseFloat(String(req.body?.amount ?? ""));
+  const noteRaw = String(req.body?.note || "").trim();
+  const note = noteRaw || "Admin wallet recharge";
+
+  if (!Number.isFinite(amount) || amount <= 0) {
+    res.status(400).json({ error: "Bad Request", message: "amount must be a positive number" });
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    const [rechargeTx] = await tx.insert(transactionsTable).values({
+      userId: id,
+      type: "SYSTEM_FEE",
+      amount: amount.toFixed(2),
+      currency: "USD",
+      amountUsd: amount.toFixed(2),
+      status: "COMPLETED",
+      paymentMethod: "SYSTEM",
+      adminNote: note,
+      description: `Admin recharge: ${note}`,
+    }).returning({ id: transactionsTable.id });
+
+    await adjustAvailableWithTreasury(tx, {
+      userId: id,
+      deltaUsd: amount,
+      transactionId: rechargeTx.id,
+      currency: "USD",
+      idempotencyKey: `admin:recharge:${rechargeTx.id}`,
+      description: `Admin recharge: ${note}`,
+      metadata: {
+        adminId: req.userId || null,
+        source: "ADMIN_RECHARGE",
+      },
+    });
+  });
+
+  res.json({ message: "Wallet recharged successfully", amount: Number(amount.toFixed(2)) });
 });
 
 router.get("/admin/deposits/pending", requireAdmin as never, async (req: AuthRequest, res) => {

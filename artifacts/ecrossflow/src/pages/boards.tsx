@@ -19,7 +19,6 @@ const LEVEL_STYLE: Record<string, { bar: string; text: string; chip: string; pan
   S: { bar: 'from-violet-500/30 to-fuchsia-900/20', text: 'text-violet-100', chip: 'bg-violet-500/20 border-violet-400/40 text-violet-100', panel: 'from-violet-500/10 to-fuchsia-900/20' },
 };
 
-const STAGE_FLOW = ['Starter', 'Challenger', 'Leader', 'Ranker'] as const;
 const LEVEL_THEME_LABEL: Record<string, string> = {
   F: "Foundation",
   E: "Expansion",
@@ -29,26 +28,6 @@ const LEVEL_THEME_LABEL: Record<string, string> = {
   A: "Ascension",
   S: "Summit",
 };
-
-function mapCurrentStage(status?: UserBoardStatus, boardId?: string): string {
-  if (!status || !boardId) return `Not active ${boardId ?? 'F'}`;
-  const role = String(status.role || '').toLowerCase();
-  if (role.includes('ranker')) return `Ranker ${boardId}`;
-  if (role.includes('leader')) return `Leader ${boardId}`;
-  if (role.includes('challenger')) return `Challenger ${boardId}`;
-  if (role.includes('starter')) return `Starter ${boardId}`;
-  return `Starter ${boardId}`;
-}
-
-function currentStageIndex(status?: UserBoardStatus): number {
-  if (!status) return -1;
-  const role = String(status.role || "").toLowerCase();
-  if (role.includes("ranker")) return 3;
-  if (role.includes("leader")) return 2;
-  if (role.includes("challenger")) return 1;
-  if (role.includes("starter")) return 0;
-  return -1;
-}
 
 function parseUsd(value: unknown): number {
   const n = typeof value === 'number' ? value : Number.parseFloat(String(value ?? 0));
@@ -79,11 +58,11 @@ export default function Boards() {
 
   const selectedBoardData = boards.find((b: Board) => b.id === selectedBoard);
   const selectedStatus = statuses.find((s: UserBoardStatus) => s.boardId === selectedBoard);
-  const selectedStageIndex = currentStageIndex(selectedStatus);
   const walletBalance = parseUsd(wallet?.balanceUsd);
   const selectedEntry = parseUsd(selectedBoardData?.entryFee);
   const canAfford = walletBalance >= selectedEntry;
   const alreadyJoined = Boolean(selectedStatus?.role);
+  const manualActivationAllowed = selectedBoardData?.id === 'F';
 
   const { mutate: payBoard } = usePayBoard({
     mutation: {
@@ -97,6 +76,7 @@ export default function Boards() {
 
   const handleJoin = () => {
     if (!selectedBoardData) return;
+    if (selectedBoardData.id !== 'F') return;
     setPaying(selectedBoardData.id);
     payBoard({ boardId: selectedBoardData.id });
   };
@@ -159,27 +139,19 @@ export default function Boards() {
                 <p className="text-3xl font-display font-black">entry cost: ${selectedEntry.toFixed(0)}</p>
               </div>
               <div className="rounded-2xl border border-white/15 bg-black/30 px-4 py-4">
-                <p className="text-3xl font-display font-black">current step: {mapCurrentStage(selectedStatus, selectedBoardData.id)}</p>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-black/25 p-5">
-              <div className="mx-auto flex max-w-md flex-col items-center gap-3">
-                {STAGE_FLOW.map((stage, idx) => (
-                  <React.Fragment key={stage}>
-                    <div className={`rounded-full border px-6 py-2 text-lg font-display font-bold ${idx === selectedStageIndex ? 'border-primary/70 bg-primary/20 text-primary shadow-[0_0_18px_rgba(0,255,170,0.24)]' : 'border-white/20 bg-white/10 text-white'}`}>
-                      {stage} {selectedBoardData.id}
-                    </div>
-                    {idx < STAGE_FLOW.length - 1 && <div className="h-6 w-1 rounded-full bg-white/35" />}
-                  </React.Fragment>
-                ))}
+                <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">activation status</p>
+                <p className="text-2xl font-display font-black">{alreadyJoined ? 'Active' : 'Not active'}</p>
               </div>
             </div>
 
             <div className="mt-5 space-y-3">
               {alreadyJoined ? (
                 <div className="flex items-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-500/10 px-4 py-3 text-emerald-200">
-                  <CheckCircle2 className="h-5 w-5" /> You are already active on this level ({selectedStatus?.role}).
+                  <CheckCircle2 className="h-5 w-5" /> Your level is already activated.
+                </div>
+              ) : !manualActivationAllowed ? (
+                <div className="flex items-center gap-2 rounded-xl border border-blue-500/35 bg-blue-500/10 px-4 py-3 text-blue-200">
+                  <CheckCircle2 className="h-5 w-5" /> This level is activated automatically by progression after Board F completion.
                 </div>
               ) : !canAfford ? (
                 <div className="flex items-center gap-2 rounded-xl border border-red-500/35 bg-red-500/10 px-4 py-3 text-red-200">
@@ -197,14 +169,10 @@ export default function Boards() {
                 </button>
               )}
 
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <p className="text-xs text-muted-foreground">Total potential</p>
-                  <p className="font-display text-xl font-black">${parseUsd(selectedBoardData.totalGain).toFixed(0)}</p>
-                </div>
-                <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <p className="text-xs text-muted-foreground">Withdrawable</p>
-                  <p className="font-display text-xl font-black">${parseUsd(selectedBoardData.withdrawable).toFixed(0)}</p>
+                  <p className="text-xs text-muted-foreground">Activation cost</p>
+                  <p className="font-display text-xl font-black">${selectedEntry.toFixed(2)}</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                   <p className="text-xs text-muted-foreground">Wallet balance</p>

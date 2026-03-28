@@ -15,7 +15,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, CardElement, useStripe } from '@stripe/react-stripe-js';
 
-const DEPOSIT_METHODS = [
+const DEPOSIT_METHOD_CATALOG = [
   { value: 'MONCASH', label: 'MonCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹', currencies: ['HTG', 'USD'] },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦', currencies: ['USD', 'EUR', 'HTG'] },
@@ -23,7 +23,7 @@ const DEPOSIT_METHODS = [
   { value: 'CRYPTO', label: 'Crypto (USDC - Polygon)', flag: '🪙', currencies: ['USD'] },
 ];
 
-const WITHDRAW_METHODS = [
+const WITHDRAW_METHOD_CATALOG = [
   { value: 'MONCASH', label: 'MonCash', flag: '🇭🇹' },
   { value: 'NATCASH', label: 'NatCash', flag: '🇭🇹' },
   { value: 'BANK_TRANSFER', label: 'Virement Bancaire', flag: '🏦' },
@@ -382,6 +382,8 @@ function WalletInner() {
   const [amount, setAmount] = React.useState('');
   const [currency, setCurrency] = React.useState('USD');
   const [paymentMethod, setPaymentMethod] = React.useState('MONCASH');
+  const [enabledDepositMethods, setEnabledDepositMethods] = React.useState<string[]>(DEPOSIT_METHOD_CATALOG.map((m) => m.value));
+  const [enabledWithdrawMethods, setEnabledWithdrawMethods] = React.useState<string[]>(WITHDRAW_METHOD_CATALOG.map((m) => m.value));
   const [cryptoAsset, setCryptoAsset] = React.useState<CryptoAssetValue>('MATIC_POLYGON');
   const [cryptoInstructions, setCryptoInstructions] = React.useState<CryptoInstructions | null>(null);
   const [depositError, setDepositError] = React.useState('');
@@ -405,10 +407,38 @@ function WalletInner() {
   const { data: wallet } = useGetWallet();
   const { data: rates } = useGetExchangeRates();
 
-  const authHeaders = React.useCallback(() => {
+  const authHeaders = React.useCallback((): Record<string, string> => {
     const token = localStorage.getItem('ecrossflow_token');
     return token ? { Authorization: `Bearer ${token}` } : {};
   }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/wallet/payment-methods', {
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
+        });
+        if (!res.ok) return;
+        const payload = await res.json() as { depositMethods?: string[]; withdrawMethods?: string[] };
+        if (cancelled) return;
+        const deposit = Array.isArray(payload.depositMethods) && payload.depositMethods.length
+          ? payload.depositMethods.map((m) => String(m).toUpperCase())
+          : DEPOSIT_METHOD_CATALOG.map((m) => m.value);
+        const withdraw = Array.isArray(payload.withdrawMethods) && payload.withdrawMethods.length
+          ? payload.withdrawMethods.map((m) => String(m).toUpperCase())
+          : WITHDRAW_METHOD_CATALOG.map((m) => m.value);
+        setEnabledDepositMethods(deposit);
+        setEnabledWithdrawMethods(withdraw);
+      } catch {
+        // keep defaults
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [authHeaders]);
 
   const { mutate: deposit, isPending: isDepositing, isSuccess: depositSuccess, reset: resetDeposit } = useCreateDeposit({
     mutation: {
@@ -564,7 +594,9 @@ function WalletInner() {
     ? (amountNum / (rates.rates[currency] as number)).toFixed(2)
     : null;
 
-  const currentDepositMethods = tab === 'withdraw' ? WITHDRAW_METHODS : DEPOSIT_METHODS;
+  const currentDepositMethods = tab === 'withdraw'
+    ? WITHDRAW_METHOD_CATALOG.filter((m) => enabledWithdrawMethods.includes(m.value))
+    : DEPOSIT_METHOD_CATALOG.filter((m) => enabledDepositMethods.includes(m.value));
   const selectedCryptoAsset = CRYPTO_ASSETS.find(a => a.value === cryptoAsset) || CRYPTO_ASSETS[0];
   const selectableCurrencies = paymentMethod === 'CRYPTO'
     ? ['USD']
@@ -580,6 +612,14 @@ function WalletInner() {
   React.useEffect(() => {
     setFormError('');
   }, [amount, currency, paymentMethod, tab, destination]);
+
+  React.useEffect(() => {
+    if (!currentDepositMethods.length) return;
+    const allowed = new Set(currentDepositMethods.map((m) => m.value));
+    if (!allowed.has(paymentMethod)) {
+      setPaymentMethod(currentDepositMethods[0]!.value);
+    }
+  }, [currentDepositMethods, paymentMethod]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -655,7 +695,7 @@ function WalletInner() {
 
   const quickAmounts = tab === 'deposit' ? ['2', '5', '10', '20'] : ['3', '10', '25', '50'];
   const ctaBusy = isDepositing || isWithdrawing || isRequestingOtp;
-  const ctaDisabled = ctaBusy || !amount || (tab === 'withdraw' && !destination.trim());
+  const ctaDisabled = ctaBusy || !amount || !currentDepositMethods.length || (tab === 'withdraw' && !destination.trim());
 
   return (
     <div className="space-y-6">
@@ -696,7 +736,10 @@ function WalletInner() {
                     resetDeposit?.();
                     resetWithdraw?.();
                     setAmount('');
-                    setPaymentMethod('MONCASH');
+                    const methods = t === 'deposit'
+                      ? DEPOSIT_METHOD_CATALOG.filter((m) => enabledDepositMethods.includes(m.value))
+                      : WITHDRAW_METHOD_CATALOG.filter((m) => enabledWithdrawMethods.includes(m.value));
+                    setPaymentMethod(methods[0]?.value || 'MONCASH');
                     setCryptoInstructions(null);
                     setDepositError('');
                     setFormError('');
@@ -758,20 +801,26 @@ function WalletInner() {
 
               <div>
                 <label className="text-sm font-medium text-muted-foreground block mb-2">Methode</label>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                  {currentDepositMethods.map((m) => (
-                    <button
-                      type="button"
-                      key={m.value}
-                      onClick={() => { setPaymentMethod(m.value); setDepositError(''); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
-                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
-                        paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'
-                      }`}
-                    >
-                      <span>{m.flag}</span> {m.label}
-                    </button>
-                  ))}
-                </div>
+                {currentDepositMethods.length ? (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+                    {currentDepositMethods.map((m) => (
+                      <button
+                        type="button"
+                        key={m.value}
+                        onClick={() => { setPaymentMethod(m.value); setDepositError(''); if (m.value !== 'CRYPTO') setCryptoInstructions(null); }}
+                        className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-sm font-medium transition ${
+                          paymentMethod === m.value ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'
+                        }`}
+                      >
+                        <span>{m.flag}</span> {m.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">
+                    Aucune methode active pour cette operation. Activez-les dans le panel admin Evolution.
+                  </div>
+                )}
               </div>
 
               {paymentMethod === 'CRYPTO' && (

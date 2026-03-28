@@ -33,6 +33,8 @@ import ReferralsPage from "@/pages/referrals";
 import NotificationsPage from "@/pages/notifications";
 import ProfilePage from "@/pages/profile";
 import AdminPage from "@/pages/admin";
+import EvolutionPage from "@/pages/evolution";
+import NotifLinkPage from "@/pages/notif-link";
 import AboutPage from "@/pages/about";
 import HowItWorksPage from "@/pages/how-it-works";
 import TermsPage from "@/pages/terms";
@@ -168,6 +170,8 @@ function Router() {
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/profile" component={ProfilePage} />
       <Route path="/admin" component={AdminPage} />
+      <Route path="/admin/evolution" component={EvolutionPage} />
+      <Route path="/admin/notif-link" component={NotifLinkPage} />
       <Route path="/admin/users"><RedirectTo to="/admin?tab=users" /></Route>
       <Route path="/admin/payments"><RedirectTo to="/admin?tab=deposits" /></Route>
       <Route path="/admin/boards"><RedirectTo to="/admin?tab=boards" /></Route>

@@ -9,6 +9,7 @@ import { sendEmail, buildOtpEmail, buildEmailVerificationLinkEmailLocalized, bui
 import { OAuth2Client } from "google-auth-library";
 import { createHash } from "crypto";
 import { ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.js";
+import { getBooleanSetting, getNumberSetting, getSystemSetting } from "../services/system-config.js";
 
 const googleClient = process.env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(process.env.GOOGLE_CLIENT_ID)
@@ -106,6 +107,15 @@ function getPublicAppUrl(): string {
   return "https://ecrossflow.com";
 }
 
+function renderTemplate(template: string, vars: Record<string, string | number>): string {
+  let output = template;
+  for (const [key, value] of Object.entries(vars)) {
+    const pattern = new RegExp(`{{\\s*${key}\\s*}}`, "g");
+    output = output.replace(pattern, String(value));
+  }
+  return output;
+}
+
 function isTwilioConfigured(): boolean {
   const sid = process.env.TWILIO_ACCOUNT_SID?.trim() || "";
   const token = process.env.TWILIO_AUTH_TOKEN?.trim() || "";
@@ -129,8 +139,51 @@ function normalizeE164Phone(input?: string | null): string {
 async function sendEmailVerificationLink(userId: string, role: string, email: string, preferredLanguage?: string): Promise<void> {
   const verificationToken = signToken(userId, role, false);
   const link = `${getPublicAppUrl()}/api/auth/confirm-email?token=${encodeURIComponent(verificationToken)}`;
-  await sendEmail(buildEmailVerificationLinkEmailLocalized(link, email, preferredLanguage)).catch(() => {
+  const cfg = await getSystemSetting<Record<string, unknown>>("notif_email_verification", {
+    subject: "",
+    bodyHtml: "",
+  });
+  const subjectTpl = String(cfg?.subject || "").trim();
+  const bodyTpl = String(cfg?.bodyHtml || "").trim();
+  const fallback = buildEmailVerificationLinkEmailLocalized(link, email, preferredLanguage);
+  const payload = subjectTpl && bodyTpl
+    ? {
+      to: email,
+      subject: renderTemplate(subjectTpl, { app_name: "Ecrossflow" }),
+      html: renderTemplate(bodyTpl, {
+        app_name: "Ecrossflow",
+        verification_link: link,
+        email,
+      }),
+    }
+    : fallback;
+  await sendEmail(payload).catch(() => {
     console.warn(`[EMAIL] Verification link delivery failed for ${email}`);
+  });
+}
+
+async function sendAccountActivatedNotificationEmail(email: string, preferredLanguage?: string): Promise<void> {
+  const cfg = await getSystemSetting<Record<string, unknown>>("notif_email_notification", {
+    subject: "",
+    bodyHtml: "",
+  });
+  const minDeposit = await getNumberSetting("min_deposit_usd", 2);
+  const subjectTpl = String(cfg?.subject || "").trim();
+  const bodyTpl = String(cfg?.bodyHtml || "").trim();
+  const fallback = buildAccountActivatedEmail(email, preferredLanguage);
+  const payload = subjectTpl && bodyTpl
+    ? {
+      to: email,
+      subject: renderTemplate(subjectTpl, { app_name: "Ecrossflow", min_deposit_usd: minDeposit }),
+      html: renderTemplate(bodyTpl, {
+        app_name: "Ecrossflow",
+        min_deposit_usd: minDeposit,
+        email,
+      }),
+    }
+    : fallback;
+  await sendEmail(payload).catch(() => {
+    console.warn(`[EMAIL] Activation success email failed for ${email}`);
   });
 }
 
@@ -440,9 +493,7 @@ router.get("/auth/confirm-email", async (req, res) => {
       .set({ status: "ACTIVE", activatedAt: now })
       .where(eq(usersTable.id, userId));
 
-    await sendEmail(buildAccountActivatedEmail(user.email, user.preferredLanguage)).catch(() => {
-      console.warn(`[EMAIL] Activation success email failed for ${user.email}`);
-    });
+    await sendAccountActivatedNotificationEmail(user.email, user.preferredLanguage);
 
     res.redirect(`${userLoginUrl}?verified=success`);
   } catch {
@@ -679,12 +730,14 @@ router.get("/auth/otp-delivery-options", requireAuth as never, async (req, res) 
 
   const phone = normalizeE164Phone(rows[0].phone);
   const twilioReady = isTwilioConfigured();
-  const smsAvailable = twilioReady && Boolean(phone);
+  const smsEnabled = await getBooleanSetting("enable_sms_otp", true);
+  const whatsappEnabled = await getBooleanSetting("enable_whatsapp_otp", false);
+  const smsAvailable = smsEnabled && twilioReady && Boolean(phone);
   res.json({
     methods: {
       email: { available: true },
       sms: { available: smsAvailable },
-      whatsapp: { available: false },
+      whatsapp: { available: whatsappEnabled && smsAvailable },
     },
     phonePresent: Boolean(phone),
   });
@@ -710,12 +763,41 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
 
   const { email, phone } = users[0];
   const method = (req.body?.method as string) || "email";
-  if (method === "whatsapp") {
+  const smsEnabled = await getBooleanSetting("enable_sms_otp", true);
+  const whatsappEnabled = await getBooleanSetting("enable_whatsapp_otp", false);
+  if (method === "whatsapp" && !whatsappEnabled) {
     res.status(400).json({ error: "Bad Request", message: "WhatsApp OTP is currently disabled" });
+    return;
+  }
+  if (method === "sms" && !smsEnabled) {
+    res.status(400).json({ error: "Bad Request", message: "SMS OTP is currently disabled" });
     return;
   }
   const otp = generateOtp();
   await saveOtpCode(authReq.userId, otp);
+  const otpValidityMinutes = 10;
+  const smsCfg = await getSystemSetting<Record<string, unknown>>("notif_sms_otp", {
+    body: "Votre code {{otp}}. Valable {{minutes}} minutes.",
+  });
+  const emailOtpCfg = await getSystemSetting<Record<string, unknown>>("notif_email_otp", {
+    subject: "",
+    bodyHtml: "",
+  });
+  const smsBody = renderTemplate(String(smsCfg?.body || "Votre code {{otp}}. Valable {{minutes}} minutes."), {
+    otp,
+    minutes: otpValidityMinutes,
+    app_name: "Ecrossflow",
+  });
+  const emailSubjectTpl = String(emailOtpCfg?.subject || "").trim();
+  const emailBodyTpl = String(emailOtpCfg?.bodyHtml || "").trim();
+  const defaultOtpEmail = buildOtpEmail(otp, email);
+  const otpEmailPayload = emailSubjectTpl && emailBodyTpl
+    ? {
+      to: email,
+      subject: renderTemplate(emailSubjectTpl, { otp, minutes: otpValidityMinutes, app_name: "Ecrossflow" }),
+      html: renderTemplate(emailBodyTpl, { otp, minutes: otpValidityMinutes, app_name: "Ecrossflow", email }),
+    }
+    : defaultOtpEmail;
 
   if (method === "sms") {
     const hasTwilio = isTwilioConfigured();
@@ -726,7 +808,6 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
         const fromPhone = normalizeE164Phone(process.env.TWILIO_PHONE!);
         const toPhone = normalizeE164Phone(phone);
         if (toPhone) {
-          const body = `Votre code Ecrossflow : ${otp}. Valable 10 minutes.`;
           const twilioTo = toPhone;
           const twilioFrom = fromPhone;
           const resp = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Messages.json`, {
@@ -735,7 +816,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
               Authorization: `Basic ${Buffer.from(`${accountSid}:${authToken}`).toString("base64")}`,
               "Content-Type": "application/x-www-form-urlencoded",
             },
-            body: new URLSearchParams({ To: twilioTo, From: twilioFrom, Body: body }).toString(),
+            body: new URLSearchParams({ To: twilioTo, From: twilioFrom, Body: smsBody }).toString(),
           });
           if (!resp.ok) {
             const raw = await resp.text();
@@ -754,7 +835,7 @@ router.post("/auth/send-otp", requireAuth as never, async (req, res) => {
   }
 
   // Default: email
-  await sendEmail(buildOtpEmail(otp, email)).catch(() => {
+  await sendEmail(otpEmailPayload).catch(() => {
     console.warn(`[OTP] Email delivery failed for ${email} — OTP code: ${otp}`);
   });
 
@@ -785,9 +866,24 @@ router.post("/auth/resend-otp", requireAuth as never, async (req, res) => {
 
   const { email } = users[0];
   const otp = generateOtp();
+  const otpValidityMinutes = 10;
+  const emailOtpCfg = await getSystemSetting<Record<string, unknown>>("notif_email_otp", {
+    subject: "",
+    bodyHtml: "",
+  });
+  const emailSubjectTpl = String(emailOtpCfg?.subject || "").trim();
+  const emailBodyTpl = String(emailOtpCfg?.bodyHtml || "").trim();
+  const defaultOtpEmail = buildOtpEmail(otp, email);
+  const otpEmailPayload = emailSubjectTpl && emailBodyTpl
+    ? {
+      to: email,
+      subject: renderTemplate(emailSubjectTpl, { otp, minutes: otpValidityMinutes, app_name: "Ecrossflow" }),
+      html: renderTemplate(emailBodyTpl, { otp, minutes: otpValidityMinutes, app_name: "Ecrossflow", email }),
+    }
+    : defaultOtpEmail;
   await saveOtpCode(authReq.userId, otp);
 
-  await sendEmail(buildOtpEmail(otp, email)).catch(() => {
+  await sendEmail(otpEmailPayload).catch(() => {
     console.warn(`[OTP] Email delivery failed for ${email} — OTP code: ${otp}`);
   });
 
@@ -871,9 +967,7 @@ router.post("/auth/verify-email", requireAuth as never, async (req, res) => {
       .where(eq(usersTable.id, authReq.userId!));
   });
 
-  await sendEmail(buildAccountActivatedEmail(users[0].email, users[0].preferredLanguage)).catch(() => {
-    console.warn(`[EMAIL] Activation success email failed for ${users[0].email}`);
-  });
+  await sendAccountActivatedNotificationEmail(users[0].email, users[0].preferredLanguage);
 
   res.json({ message: "Email verified successfully" });
 });

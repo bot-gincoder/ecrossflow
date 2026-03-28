@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, Wallet, Layers, History, Users, 
   User, Bell, LogOut, Menu, X, ShieldAlert,
-  CreditCard, BarChart
+  CreditCard, BarChart, Sparkles
 } from 'lucide-react';
 import { useAppStore } from '@/hooks/use-store';
 import type { Theme, Language } from '@/hooks/use-store';
@@ -129,6 +129,8 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
     { href: '/admin?tab=withdrawals', icon: Wallet, label: 'Retraits' },
     { href: '/admin?tab=boards', icon: Layers, label: 'Boards' },
     { href: '/admin?tab=reports', icon: History, label: 'Rapports' },
+    { href: '/admin/evolution', icon: Sparkles, label: 'Evolution' },
+    { href: '/admin/notif-link', icon: Bell, label: 'Notif & Link' },
     { href: '/dashboard', icon: LayoutDashboard, label: 'Quitter Admin' },
   ] : [
     { href: '/dashboard', icon: LayoutDashboard, label: t('nav.dashboard') },

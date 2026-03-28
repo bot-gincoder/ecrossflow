@@ -1,295 +1,60 @@
-
-Implémente un système multilingue complet, robuste, SEO-friendly et extensible pour le site.
-
-OBJECTIF
-Je veux que le site soit traduisible automatiquement dans un grand nombre de langues, tout en gardant une architecture propre, rapide, maintenable et professionnelle.
-Je ne veux pas d’un simple widget de traduction navigateur.
-Je veux une vraie implémentation i18n cté application, avec URLs par langue, fallback propre, traduction automatique cté serveur, et possibilité de corriger les traductions manuellement.
-
-ARCHITECTURE CIBLE
-1. Utiliser une architecture i18n native basée sur le routing par locale.
-2. Chaque langue doit avoir sa propre URL, par exemple :
-   /fr
-   /en
-   /es
-   /pt
-   /de
-   etc.
-3. Conserver une langue source principale pour tout le projet : FR par défaut.
-4. Séparer strictement :
-   - les textes UI (menus, boutons, labels, messages d’erreur)
-   - le contenu métier / marketing / SEO
-   - le contenu dynamique venant de la base de données
-5. Mettre un système de fallback :
-   - si une traduction est absente dans une langue, afficher la valeur FR
-   - ne jamais casser l’affichage
-6. Prévoir un sélecteur de langue visible et propre.
-7. Détecter automatiquement la langue préférée du visiteur à la première visite, puis mémoriser son choix.
-8. Générer automatiquement les traductions via une API serveur sécurisée.
-9. Prévoir une couche d’édition manuelle pour corriger les traductions importantes.
-10. Le système doit être scalable pour ajouter beaucoup de langues plus tard.
-
-STACK RECOMMANDÉE
-Si le projet est sous Next.js, utilise l’App Router avec une vraie structure locale. Next.js documente officiellement l’internationalisation du routing ainsi que l’App Router. 0
-
-TRADUCTION AUTOMATIQUE
-Utiliser Google Cloud Translation cté serveur pour :
-- lister les langues supportées
-- traduire automatiquement les nouvelles chanes
-- étendre facilement à beaucoup de langues
-Google Cloud documente le listage des langues supportées et la traduction programmatique. 1
-
-IMPORTANT
-- Aucune clé API ne doit être exposée cté client
-- Toute traduction automatique doit passer par une route serveur / backend
-- Les résultats doivent être stockés, pas recalculés à chaque chargement
-- Les pages importantes doivent pouvoir être revues manuellement
-- Prévoir plus tard un glossaire métier / custom translation pour les termes de marque ou expressions métier sensibles. Google Cloud documente aussi les traductions personnalisées pour adapter style et vocabulaire. 2
-
-LANGUES À ACTIVER AU DÉPART
-Initialiser au minimum :
-- fr
-- en
-- es
-- pt
-- de
-- it
-- nl
-- ar
-- hi
-- zh
-- ht
-
-Prévoir une architecture qui permette d’en ajouter d’autres via configuration, sans refactor majeur.
-Les langues supportées doivent idéalement être récupérables via l’API de traduction plutt qu’écrites en dur seulement. 3
-
-STRUCTURE TECHNIQUE ATTENDUE
-
-A. ROUTING
-Créer une structure de routes localisées.
-Exemple :
-app/
-  [locale]/
-    layout.tsx
-    page.tsx
-    about/page.tsx
-    contact/page.tsx
-
-Le locale doit être validé via une liste centralisée.
-Le layout doit charger le dictionnaire de traduction correspondant.
-
-B. DOSSIER DE TRADUCTIONS
-Créer une structure du type :
-src/
-  i18n/
-    config.ts
-    get-dictionary.ts
-    locales/
-      fr/
-        common.json
-        home.json
-        pricing.json
-      en/
-        common.json
-        home.json
-        pricing.json
-      es/
-        common.json
-        home.json
-        pricing.json
-
-C. CONFIG I18N
-Créer un fichier central qui contient :
-- locales supportées
-- locale par défaut
-- langues RTL éventuelles
-- mapping nom affichable / code langue
-- fallback locale
-
-D. CHARGEMENT DES TRADUCTIONS
-Créer une fonction serveur du type :
-- getDictionary(locale, namespace)
-ou
-- getMessages(locale)
-
-Elle doit :
-- charger la bonne langue
-- fallback sur FR si clé absente
-- supporter le découpage par namespace
-
-E. UTILISATION DANS LES COMPOSANTS
-Aucun texte visible ne doit rester hardcodé dans les composants UI.
-Remplacer par des clés du type :
-t("hero.title")
-t("hero.subtitle")
-t("nav.features")
-t("auth.login")
-t("errors.network")
-
-F. LANGUAGE SWITCHER
-Créer un composant de changement de langue :
-- accessible
-- responsive
-- garde la route actuelle si possible
-- met à jour l’URL avec la locale
-- sauvegarde la préférence dans cookie ou local storage
-- fonctionne sans casser SEO
-
-G. DÉTECTION AUTO DE LANGUE
-À la première visite :
-- lire Accept-Language ou préférence sauvegardée
-- rediriger vers la locale la plus proche supportée
-- sinon fallback FR
-
-H. SEO MULTILINGUE
-Implémenter :
-- URLs par langue
-- balises hreflang
-- canonical correct par version
-- metadata traduites par locale
-- sitemap localisé si possible
-- titres et descriptions SEO par langue
-
-I. CONTENU DYNAMIQUE
-Pour tout contenu en base :
-Créer une structure de traduction de type :
-translations:
-  entity_type
-  entity_id
-  field_name
-  locale
-  value
-  status
-  source_hash
-  updated_at
-
-Ou une structure équivalente propre.
-
-Exemple :
-Page
-- id
-- slug
-- source_locale
-- status
-
-PageTranslation
-- page_id
-- locale
-- title
-- description
-- body
-- seo_title
-- seo_description
-- is_auto_translated
-- is_reviewed
-- updated_at
-
-J. PIPELINE DE TRADUCTION AUTOMATIQUE
-Créer un pipeline serveur qui :
-1. détecte les nouvelles chanes source
-2. calcule un hash du texte source
-3. vérifie si une traduction existe déjà
-4. sinon appelle l’API de traduction
-5. stocke le résultat
-6. marque la traduction comme auto-generated
-7. permet ensuite une correction manuelle
-
-K. ADMIN INTERNE
-Créer une base pour un mini backoffice de traduction avec :
-- liste des langues
-- liste des clés manquantes
-- statut : auto / reviewed / missing
-- édition manuelle d’une traduction
-- filtre par page / namespace / langue
-- recherche par clé
-
-L. PERFORMANCE
-Le site doit :
-- charger uniquement les messages nécessaires
-- éviter de charger toutes les langues en même temps
-- mettre en cache les dictionnaires
-- éviter toute traduction API en runtime cté client
-- rester rapide sur mobile
-
-M. ERREURS ET FALLBACKS
-Prévoir :
-- logs propres si une clé manque
-- fallback FR
-- aucune page blanche
-- aucun crash si une langue n’est pas encore complète
-
-N. RTL
-Prévoir le support RTL pour les langues comme l’arabe :
-- dir="rtl" automatiquement
-- styles compatibles
-- inversion logique si nécessaire
-
-O. SÉCURITÉ
-- secret de traduction uniquement cté serveur
-- variable d’environnement sécurisée
-- aucune fuite de token dans le bundle client
-- rate limiting sur les endpoints de traduction si exposés en interne
-
-VARIABLES D’ENVIRONNEMENT
-Prévoir au minimum :
-GOOGLE_CLOUD_PROJECT_ID=
-GOOGLE_CLOUD_LOCATION=
-GOOGLE_APPLICATION_CREDENTIALS=
-DEFAULT_LOCALE=fr
-
-Si tu fais un service interne :
-TRANSLATION_PROVIDER=google
-AUTO_TRANSLATE_ENABLED=true
-
-LIVRABLES ATTENDUS
-Je veux que tu me génères et implémentes :
-1. la structure i18n complète
-2. la config des locales
-3. le routing localisé
-4. le dictionnaire FR initial
-5. le système de fallback
-6. le composant language switcher
-7. la détection automatique de langue
-8. l’intégration serveur avec le provider de traduction
-9. le stockage persistant des traductions
-10. la base d’un panneau admin de correction
-11. les métadonnées SEO localisées
-12. un exemple complet sur au moins :
-   - homepage
-   - navbar
-   - footer
-   - page contact
-13. une documentation README claire pour maintenance
-
-BONNES PRATIQUES OBLIGATOIRES
-- code propre, modulaire, typé
-- aucune duplication inutile
-- noms explicites
-- composants réutilisables
-- aucune chane hardcodée dans l’UI finale
-- fallback strict et stable
-- architecture pensée pour production
-
-ORDRE D’EXÉCUTION
-1. auditer la structure actuelle du projet
-2. identifier tous les textes hardcodés
-3. mettre en place la couche i18n
-4. migrer l’UI existante vers des clés de traduction
-5. ajouter routing par locale
-6. ajouter switcher
-7. intégrer SEO localisé
-8. créer pipeline auto-translation
-9. ajouter stockage persistant
-10. proposer un rapport final avec :
-   - ce qui a été fait
-   - ce qui reste optionnel
-   - comment ajouter une nouvelle langue
-
-IMPORTANT FINAL
-Je veux une implémentation réellement production-ready, pas un simple mock.
-Fais les bons choix techniques automatiquement.
-
-Commence par auditer Le code actuel, puis mets en place la meilleure architecture i18n possible sans casser l’existant. Priorité : SEO, performance, maintenabilité, traduction automatique, fallback propre, et possibilité de corriger manuellement les traductions critiques.
+ pourquoi il n'y a pas de mouvement alors que j'ai ajouté plusieur compte valide, mais ceo ne fais aucun pas c'est pas bon du tout le systeme doit detecté chaque compte qui vient de s'aciver et les assigne
+    automatiquement le prochain numero vide, ensuite il doit calculer par rapport au numero deja present sur le board et l'assigner une position temporaire en attendant les deux compte qui le suit s'active et
+  recoivent leur numero pour qu'il pas au etapes suivante ainsi de suite, petite note que tu n'as pas prix en contre si ceo a le numero 1 alora ils doit etre placé actuelement dans l'etape ranker F, justequ'a
+  l'arrivé de deux leader pour qu'il passe au board E, afin que le board soit diviser pour que les deux leaders deviennent ranker F a leur tour et chacun dans leur board separé, et aussi j'ai remarqué que le ledger interne fonctionne parfaiteement alors enleve les plateforme de bourse digital externe, je veux aussi que le systeme
+  des board se repose entierement sur ce ledger, et aussi a la place des methode paiement integre des payment gateway microtransaction, ex stripe, moncash/Natcash(meme si c'est manuel, mais avec un systeme qui m'aide a verifié si les paie qu'on me notifie sont vraiment debiter ) et crypto aussi et tous ces valeurs
+  doivent etre entierment personaliseable dans le paneL admin
 
 
-Notez bien les termes[starter, chalenger, leader et ranker] ne doit pas etre traduisible il dois rester en anglais
+je veux que tu passe des heure sur chaque details du projet petit ou gros, je veux qu'en meme temp tu lances des testes , des screershort pour voir chaque ce que tu as fais pour ajusté si necessaire et des screen video pour tester toi meme en tant que dev pro , pour bien deboguer le system et ne t'arrete que lorsque tout soit comme demandé
+
+pour qu'un compte, ou qu'un filleuille invité soit valide il doit faire un depot et payer le board F
+
+Voici comment chaque compte gravira les positions selons le systeme
+
+C'est infos ne doit en aucun cas etre visible par un utilisateur normal, uniquement l'admin doit voir en temp reel comment chaque board divisera selon un system de progression.
+
+Board F, prix 2$
+2x8= $16
+$10 deduit pour le board E.
+$2 deduit automatiquement , pour fee board.
+$4 ajouter au wallet, retirable + referal bonus fileuil de $0.50 par invité valide directe.
+Si un utilisateur ex: parain-main invite une personne elle devient son filleuil directe et parain-main gagne $0.5
+à chaque fois qu'un filleuil(ex : filleuil1) invite a son tour un filleuil(ex :filleuil2)  parain-main , parain du fileuil1 gagne la moitié de la somme gagné quand il a invité filleuil2 jusqu'au deuxieme generation. Par exemple si filleuil2 invite filleuil3 alors parain-main ne gagne plus , c'est filleuil2 qui gagne $0.50 et filleuil 1 aussi qui gagne $0.25
+
+Si l'utilisateur active son compte en payant $2, et n'invite personne , il n'aura pas access au board suivante E. Donc il ne progressera plus que si et seulement s'il invite au minimum 2 personne avec son lien.
+
+Board E , prix $10 ,  le system fait $10 x 8 = 80.
+$50 deduit pour board D.
+$10 fee board
+$20 sont ajouter au wallet retirable + bonus referal.
+$0.25 par invité valide.+  Les memes process de mootier pour les generations de filleuile que le board 1.
+
+Board D. Prix $50. Le systeme fait 50x8 = $400
+$200 sont deduis pour le board suivant C.
+$50 pour fee board
+$150 ajouter au wallet retirable plus bonus referals, les memes regles referal que le board E
+.
+Board C. prix $200 , 200x8= $1600.
+$800 sont deduit pour le board B.
+$200 fee board.
+$600 ajouter au wallet + bonus referal , le meme que board D.
+
+Board B, prix $800. 800x8 = $6400.
+$3200 sont deduit pour le board A,
+$800 fee board.
+$2400 sont ajouter au wallet+ bonus referal avec $0,062 par tete. + le meme principe de division de generation des precedentes board.
+ 
+Board A prix $3200. 3200x8 = $25600.
+$12800 sont deduit le boards S.
+$3200 pour fee board.
+$9600 sont ajouter au wallet plus les meme principe de bonus referal le board precedent.
+
+Board S, prix 12800. 12800x8,
+$102 400
+
+51200 sont deduit comme frais systemes
+50 000 sont retirable sur le wallet
+
+tu vois combient coute chaque board et combient ils donne apres a chaque rang ranker d'un niveau et les bonus aussi modifie la partie public, des boards pour affiché ces prix , ne dite rien dans la partie public a propos des fee system juste dis leur tant prix d'entré , tant pour le board suivant, et tant pour le sorti en arrivant ranker tres brefs, l'achitecture de ce systeme doit etre resté secrete
+
