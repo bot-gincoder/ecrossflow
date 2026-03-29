@@ -4,48 +4,28 @@ import {
   walletsTable,
   transactionsTable,
   notificationsTable,
-  otpCodesTable,
-  usersTable,
   ledgerEntriesTable,
   ledgerAccountsTable,
 } from "@workspace/db";
-import { eq, desc, and, gte, lte, sql, isNull, or, aliasedTable, count } from "drizzle-orm";
+import { eq, desc, and, sql, or, aliasedTable, count } from "drizzle-orm";
 import { requireActiveAuth as requireAuth, type AuthRequest } from "../middlewares/auth.js";
-import { createHash, randomUUID } from "crypto";
+import { randomUUID } from "crypto";
 import {
-  creditAvailableFromTreasury,
   ensureLedgerInfra,
   ensureWalletAndLedgerAccounts,
   moveAvailableToBlocked,
 } from "../lib/ledger.js";
-import { isMoncashAutoDepositEnabled, moncashCreatePayment, moncashRetrieveOrderPayment } from "../services/moncash.js";
-import {
-  getCryptoDepositProvider,
-  createCustodialCryptoDeposit,
-  getCustodialCryptoDepositStatus,
-  getCryptoAssetMeta,
-  getCryptoWithdrawMode,
-  isCryptoDepositConfigured,
-  isCryptoPayoutConfigured,
-  resolveCryptoAsset,
-} from "../services/crypto-provider.js";
-import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
-import { isCirclePrimary } from "../services/circle.js";
 import { getNumberSetting, getSystemSetting } from "../services/system-config.js";
+import {
+  enabledDepositMethods,
+  enabledWithdrawMethods,
+  normalizePaymentRuntimeConfig,
+  PAYMENT_RUNTIME_DEFAULTS,
+} from "../services/payment-config.js";
 
 type PaymentMethodValue = "MONCASH" | "NATCASH" | "CARD" | "BANK_TRANSFER" | "CRYPTO" | "PAYPAL" | "SYSTEM";
 
 const router: IRouter = Router();
-let otpInfraReady = false;
-let otpInfraPromise: Promise<void> | null = null;
-
-function generateOtp(): string {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-function hashOtp(otp: string): string {
-  return createHash("sha256").update(otp).digest("hex");
-}
 
 function operationRef(prefix: "DEP" | "WDR"): string {
   return `${prefix}-${randomUUID()}`;
@@ -62,11 +42,10 @@ const MIN_DEPOSIT_USD = amountLimit("MIN_DEPOSIT_USD", 2);
 const MAX_DEPOSIT_USD = amountLimit("MAX_DEPOSIT_USD", 10000);
 const MIN_WITHDRAW_USD = amountLimit("MIN_WITHDRAW_USD", 3);
 const MAX_WITHDRAW_USD = amountLimit("MAX_WITHDRAW_USD", 5000);
-const CRYPTO_PROVIDER_MIN_DEPOSIT_USD = amountLimit("CRYPTO_PROVIDER_MIN_DEPOSIT_USD", 7);
 
 const SUPPORTED_CURRENCIES = new Set(["USD", "HTG", "EUR", "GBP", "CAD", "BTC", "ETH", "USDT", "USDC", "MATIC", "BNB"]);
-const BASE_DEPOSIT_METHODS = ["MONCASH", "NATCASH", "BANK_TRANSFER", "CARD", "CRYPTO"] as const;
-const BASE_WITHDRAW_METHODS = ["MONCASH", "NATCASH", "BANK_TRANSFER", "CRYPTO"] as const;
+const BASE_DEPOSIT_METHODS = ["MONCASH", "NATCASH", "CARD", "CRYPTO"] as const;
+const BASE_WITHDRAW_METHODS = ["MONCASH", "NATCASH", "CRYPTO"] as const;
 const MATIC_PER_USD = Number.parseFloat(process.env.MATIC_PER_USD || "1.1");
 
 const FIXED_RATES: Record<string, number> = {
@@ -88,80 +67,23 @@ function parsePositiveAmount(value: unknown): number | null {
   return num;
 }
 
-function normalizeMethodList(value: unknown, fallback: readonly string[]): Set<string> {
-  if (!Array.isArray(value)) return new Set(fallback);
-  const allowed = new Set(fallback);
-  const normalized = value
-    .map((v) => String(v || "").toUpperCase().trim())
-    .filter((v) => allowed.has(v));
-  return new Set(normalized.length ? normalized : fallback);
+async function getPaymentRuntimeConfig() {
+  const raw = await getSystemSetting<unknown>("payment_runtime_config", PAYMENT_RUNTIME_DEFAULTS);
+  return normalizePaymentRuntimeConfig(raw);
 }
 
 async function getEnabledDepositMethods(): Promise<Set<string>> {
-  const configured = await getSystemSetting<unknown>("deposit_methods_enabled", BASE_DEPOSIT_METHODS);
-  return normalizeMethodList(configured, BASE_DEPOSIT_METHODS);
+  const config = await getPaymentRuntimeConfig();
+  const defaults = new Set(BASE_DEPOSIT_METHODS);
+  const list = enabledDepositMethods(config).filter((m) => defaults.has(m as (typeof BASE_DEPOSIT_METHODS)[number]));
+  return new Set(list);
 }
 
 async function getEnabledWithdrawMethods(): Promise<Set<string>> {
-  const configured = await getSystemSetting<unknown>("withdraw_methods_enabled", BASE_WITHDRAW_METHODS);
-  return normalizeMethodList(configured, BASE_WITHDRAW_METHODS);
-}
-
-function mapCryptoDepositProviderStatus(raw: unknown): "COMPLETED" | "FAILED" | "CANCELLED" | null {
-  const status = String(raw || "").trim().toLowerCase();
-  if (!status) return null;
-  if (status === "finished" || status === "paid" || status === "manual_accept") return "COMPLETED";
-  if (status === "failed") return "FAILED";
-  if (status === "refunded") return "FAILED";
-  if (status === "expired" || status === "canceled") return "CANCELLED";
-  return null;
-}
-
-async function ensureOtpInfra(): Promise<void> {
-  if (otpInfraReady) return;
-  if (otpInfraPromise) return otpInfraPromise;
-  otpInfraPromise = (async () => {
-    await db.execute(sql`
-      DO $$ BEGIN
-        CREATE TYPE otp_purpose AS ENUM ('EMAIL_VERIFICATION','WITHDRAWAL');
-      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-    `);
-    await db.execute(sql`
-      CREATE TABLE IF NOT EXISTS otp_codes (
-        id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-        user_id uuid NOT NULL REFERENCES users(id),
-        purpose otp_purpose NOT NULL,
-        code_hash varchar(128) NOT NULL,
-        amount_usd numeric(18,2),
-        attempts integer NOT NULL DEFAULT 0,
-        max_attempts integer NOT NULL DEFAULT 5,
-        expires_at timestamptz NOT NULL,
-        consumed_at timestamptz,
-        created_at timestamptz NOT NULL DEFAULT now()
-      );
-    `);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_user_purpose_created ON otp_codes(user_id, purpose, created_at);`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_expires_at ON otp_codes(expires_at);`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS idx_otp_consumed_at ON otp_codes(consumed_at);`);
-    otpInfraReady = true;
-  })();
-  try {
-    await otpInfraPromise;
-  } finally {
-    otpInfraPromise = null;
-  }
-}
-
-async function requireWithdrawKycApproved(userId: string): Promise<null | { status: 403; message: string }> {
-  const users = await db.select({ kycStatus: usersTable.kycStatus })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId))
-    .limit(1);
-  if (!users.length) return { status: 403, message: "User not found" };
-  if (users[0].kycStatus !== "APPROVED") {
-    return { status: 403, message: "KYC approval is required before any withdrawal." };
-  }
-  return null;
+  const config = await getPaymentRuntimeConfig();
+  const defaults = new Set(BASE_WITHDRAW_METHODS);
+  const list = enabledWithdrawMethods(config).filter((m) => defaults.has(m as (typeof BASE_WITHDRAW_METHODS)[number]));
+  return new Set(list);
 }
 
 router.get("/wallet", requireAuth as never, async (req: AuthRequest, res) => {
@@ -202,6 +124,15 @@ router.get("/wallet/payment-methods", requireAuth as never, async (_req: AuthReq
   res.json({
     depositMethods,
     withdrawMethods,
+  });
+});
+
+router.get("/wallet/payment-config", requireAuth as never, async (_req: AuthRequest, res) => {
+  const config = await getPaymentRuntimeConfig();
+  res.json({
+    config,
+    depositMethods: [...await getEnabledDepositMethods()],
+    withdrawMethods: [...await getEnabledWithdrawMethods()],
   });
 });
 
@@ -284,31 +215,33 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     res.status(400).json({ error: "Bad Request", message: "Unsupported payment method" });
     return;
   }
+  const paymentRuntime = await getPaymentRuntimeConfig();
+  const methodRuntime = paymentRuntime.deposit[paymentMethodNormalized];
+  if (!methodRuntime) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported payment method configuration" });
+    return;
+  }
+  if (paymentMethodNormalized === "CARD") {
+    res.status(400).json({
+      error: "Bad Request",
+      message: "Card deposits must be completed from the external payment link.",
+    });
+    return;
+  }
 
-  let resolvedCryptoAsset: ReturnType<typeof resolveCryptoAsset> = null;
+  const evidenceValue = String(evidenceUrl || "").trim();
+  const referenceValue = String(reference || "").trim();
+  if (methodRuntime.requireReference && !referenceValue) {
+    res.status(400).json({ error: "Bad Request", message: "Transaction ID / reference is required for this deposit method" });
+    return;
+  }
+  if (methodRuntime.requireScreenshot && !evidenceValue) {
+    res.status(400).json({ error: "Bad Request", message: "Screenshot upload is required for this deposit method" });
+    return;
+  }
+
+  let cryptoSelection: { symbol: string; network: string; address?: string } | null = null;
   if (paymentMethodNormalized === "CRYPTO") {
-    if (isCirclePrimary()) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: "Crypto deposit is restricted to USDC on Polygon via Circle. Use /api/wallet/circle/address.",
-      });
-      return;
-    }
-    if (!isCryptoDepositConfigured()) {
-      res.status(503).json({
-        error: "Service Unavailable",
-        message: "Crypto deposit provider is not configured yet",
-      });
-      return;
-    }
-    resolvedCryptoAsset = resolveCryptoAsset(cryptoAsset, currency);
-    if (!resolvedCryptoAsset) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: "Invalid or unsupported crypto asset. Allowed: MATIC(POLYGON), BNB(BSC)",
-      });
-      return;
-    }
     if (String(currency).toUpperCase() !== "USD") {
       res.status(400).json({
         error: "Bad Request",
@@ -316,6 +249,14 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
       });
       return;
     }
+    const assets = methodRuntime.assets || [];
+    if (!assets.length) {
+      res.status(400).json({ error: "Bad Request", message: "No crypto network configured by admin for manual deposits" });
+      return;
+    }
+    const requested = String(cryptoAsset || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    const preferred = assets.find((a) => `${a.symbol}_${a.network}`.toUpperCase() === requested) || assets[0];
+    cryptoSelection = preferred ? { ...preferred } : null;
   }
 
   const amountNum = parsePositiveAmount(amount);
@@ -335,7 +276,7 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
     return;
   }
 
-  const referenceId = reference ? String(reference).trim() : operationRef("DEP");
+  const referenceId = referenceValue || operationRef("DEP");
   if (!referenceId || referenceId.length > 100) {
     res.status(400).json({ error: "Bad Request", message: "Invalid reference format" });
     return;
@@ -365,11 +306,11 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
         paymentMethod: paymentMethodNormalized as PaymentMethodValue,
         referenceId,
         description: notes ? String(notes) : `Deposit via ${paymentMethod}`,
-        screenshotUrl: evidenceUrl ? String(evidenceUrl) : null,
+        screenshotUrl: evidenceValue || null,
         metadata: {
           clientIp: req.ip || null,
           userAgent: req.get("user-agent") || null,
-          ...(resolvedCryptoAsset ? { cryptoAsset: resolvedCryptoAsset } : {}),
+          ...(cryptoSelection ? { cryptoAsset: `${cryptoSelection.symbol}_${cryptoSelection.network}`, cryptoAddress: cryptoSelection.address || null } : {}),
         },
       }).returning();
 
@@ -396,109 +337,14 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
 
   let checkoutUrl: string | null = null;
   let cryptoInstructions: Record<string, unknown> | null = null;
-  if (paymentMethodNormalized === "MONCASH" && isMoncashAutoDepositEnabled()) {
-    try {
-      const payment = await moncashCreatePayment(String(tx.referenceId || tx.id), parseFloat(tx.amount));
-      checkoutUrl = payment.checkoutUrl;
-      const nextMeta = {
-        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: "MONCASH",
-        moncash: {
-          paymentToken: payment.paymentToken,
-          checkoutUrl: payment.checkoutUrl,
-          initiatedAt: new Date().toISOString(),
-        },
-      };
-      await db.update(transactionsTable)
-        .set({ metadata: nextMeta, updatedAt: new Date() })
-        .where(eq(transactionsTable.id, tx.id));
-    } catch (error) {
-      const nextMeta = {
-        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: "MONCASH",
-        moncashError: error instanceof Error ? error.message : "MONCASH_CREATE_PAYMENT_FAILED",
-      };
-      await db.update(transactionsTable)
-        .set({ metadata: nextMeta, updatedAt: new Date() })
-        .where(eq(transactionsTable.id, tx.id));
-    }
-  } else if (paymentMethodNormalized === "CRYPTO" && resolvedCryptoAsset) {
-    try {
-      const payment = await createCustodialCryptoDeposit({
-        referenceId: String(tx.referenceId || tx.id),
-        amountUsd: parseFloat(tx.amountUsd),
-        description: tx.description || `Deposit ${tx.referenceId || tx.id}`,
-        asset: resolvedCryptoAsset,
-      });
-      const assetMeta = getCryptoAssetMeta(resolvedCryptoAsset);
-      cryptoInstructions = {
-        provider: payment.provider,
-        paymentId: payment.paymentId,
-        payAddress: payment.payAddress,
-        payAmount: payment.payAmount,
-        payCurrency: payment.payCurrency,
-        network: payment.network || assetMeta.network,
-        expiresAt: payment.expiresAt,
-        asset: resolvedCryptoAsset,
-        assetLabel: assetMeta.label,
-      };
-      const nextMeta = {
-        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: payment.provider,
-        cryptoAsset: resolvedCryptoAsset,
-        nowpayments: {
-          paymentId: payment.paymentId,
-          payAddress: payment.payAddress,
-          payAmount: payment.payAmount,
-          payCurrency: payment.payCurrency,
-          network: payment.network || assetMeta.network,
-          paymentStatus: payment.paymentStatus,
-          expiresAt: payment.expiresAt,
-          createdAt: new Date().toISOString(),
-        },
-        ...(payment.provider === "OXAPAY" ? {
-          oxapay: {
-            trackId: payment.paymentId,
-            payAddress: payment.payAddress,
-            payAmount: payment.payAmount,
-            payCurrency: payment.payCurrency,
-            network: payment.network || assetMeta.network,
-            status: payment.paymentStatus,
-            expiresAt: payment.expiresAt,
-            createdAt: new Date().toISOString(),
-          },
-        } : {}),
-      };
-      await db.update(transactionsTable)
-        .set({ metadata: nextMeta, updatedAt: new Date() })
-        .where(eq(transactionsTable.id, tx.id));
-    } catch (error) {
-      const providerErrorDetail = error instanceof Error ? error.message : "NOWPAYMENTS_CREATE_PAYMENT_FAILED";
-      const nextMeta = {
-        ...(tx.metadata && typeof tx.metadata === "object" ? tx.metadata as Record<string, unknown> : {}),
-        provider: getCryptoDepositProvider(),
-        cryptoAsset: resolvedCryptoAsset,
-        providerError: providerErrorDetail,
-      };
-      await db.update(transactionsTable)
-        .set({ status: "FAILED", metadata: nextMeta, updatedAt: new Date(), adminNote: "Crypto deposit initialization failed" })
-        .where(eq(transactionsTable.id, tx.id));
-      if (providerErrorDetail.toLowerCase().includes("amountto is too small") || providerErrorDetail.toLowerCase().includes("amount is less than")) {
-        const selectedAssetLabel = resolvedCryptoAsset ? getCryptoAssetMeta(resolvedCryptoAsset).label : "selected crypto network";
-        res.status(400).json({
-          error: "Bad Request",
-          code: "CRYPTO_PROVIDER_MIN_AMOUNT",
-          message: `Network minimum is currently about $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} for ${selectedAssetLabel}. Please deposit at least $${CRYPTO_PROVIDER_MIN_DEPOSIT_USD} plus network fees.`,
-        });
-        return;
-      }
-      res.status(502).json({
-        error: "Bad Gateway",
-        message: "Unable to initialize crypto deposit with custodial provider",
-        detail: providerErrorDetail,
-      });
-      return;
-    }
+  if (paymentMethodNormalized === "CRYPTO" && cryptoSelection) {
+    cryptoInstructions = {
+      mode: "manual",
+      symbol: cryptoSelection.symbol,
+      network: cryptoSelection.network,
+      address: cryptoSelection.address || "",
+      note: "Manual crypto deposit: submit tx id + screenshot, admin confirms.",
+    };
   }
 
   res.status(201).json({
@@ -519,363 +365,11 @@ router.post("/wallet/deposit", requireAuth as never, async (req: AuthRequest, re
   });
 });
 
-router.post("/wallet/deposit/:id/confirm-moncash", requireAuth as never, async (req: AuthRequest, res) => {
-  await ensureLedgerInfra();
-  const id = String(req.params.id || "");
-  const rows = await db.select().from(transactionsTable)
-    .where(and(
-      eq(transactionsTable.id, id),
-      eq(transactionsTable.userId, req.userId!),
-      eq(transactionsTable.type, "DEPOSIT"),
-    ))
-    .limit(1);
-
-  if (!rows.length) {
-    res.status(404).json({ error: "Not Found", message: "Deposit transaction not found" });
-    return;
-  }
-
-  const depositTx = rows[0];
-  if ((depositTx.paymentMethod || "").toUpperCase() !== "MONCASH") {
-    res.status(400).json({ error: "Bad Request", message: "This endpoint only supports MONCASH deposits" });
-    return;
-  }
-  if (!depositTx.referenceId) {
-    res.status(400).json({ error: "Bad Request", message: "Deposit reference is missing" });
-    return;
-  }
-
-  if (depositTx.status === "COMPLETED") {
-    res.json({ ok: true, status: "COMPLETED", message: "Deposit already confirmed" });
-    return;
-  }
-  if (depositTx.status !== "PENDING") {
-    res.status(409).json({ error: "Conflict", message: `Deposit is in status ${depositTx.status}` });
-    return;
-  }
-
-  let moncashResult;
-  try {
-    moncashResult = await moncashRetrieveOrderPayment(depositTx.referenceId);
-  } catch (error) {
-    res.status(502).json({
-      error: "Bad Gateway",
-      message: "Unable to reach MonCash API",
-      detail: error instanceof Error ? error.message : "MONCASH_CALL_FAILED",
-    });
-    return;
-  }
-
-  if (!moncashResult.successful) {
-    res.status(409).json({
-      error: "Conflict",
-      message: "MonCash payment not confirmed yet",
-      providerMessage: moncashResult.message,
-    });
-    return;
-  }
-
-  await db.transaction(async (tx) => {
-    const txRows = await tx.select().from(transactionsTable)
-      .where(eq(transactionsTable.id, depositTx.id))
-      .for("update")
-      .limit(1);
-    if (!txRows.length) throw new Error("TX_NOT_FOUND");
-    const current = txRows[0];
-    if (current.status === "COMPLETED") return;
-    if (current.status !== "PENDING") throw new Error(`BAD_STATUS:${current.status}`);
-
-    await creditAvailableFromTreasury(tx, {
-      userId: current.userId,
-      transactionId: current.id,
-      amountUsd: parseFloat(current.amountUsd),
-      currency: "USD",
-      idempotencyKey: `deposit:settle:${current.id}`,
-      description: `Deposit confirmed by MonCash ${current.referenceId || current.id}`,
-      metadata: {
-        provider: "MONCASH",
-        providerTxId: moncashResult.transactionId,
-        payer: moncashResult.payer,
-        phase: "DEPOSIT_SETTLED",
-      },
-    });
-
-    const nextMeta = {
-      ...(current.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {}),
-      provider: "MONCASH",
-      providerTxId: moncashResult.transactionId,
-      payer: moncashResult.payer,
-      moncashMessage: moncashResult.message,
-      settledAt: new Date().toISOString(),
-    };
-
-    await tx.update(transactionsTable)
-      .set({ status: "COMPLETED", updatedAt: new Date(), metadata: nextMeta })
-      .where(eq(transactionsTable.id, current.id));
-
-    await tx.insert(notificationsTable).values({
-      userId: current.userId,
-      type: "DEPOSIT_SETTLED",
-      title: "Dépôt confirmé",
-      message: `Votre dépôt ${current.referenceId || current.id} a été confirmé par MonCash.`,
-      category: "financial",
-      actionUrl: "/wallet",
-      read: false,
-    });
-  });
-
-  res.json({
-    ok: true,
-    status: "COMPLETED",
-    provider: "MONCASH",
-    providerTxId: moncashResult.transactionId,
-  });
-});
-
-router.post("/wallet/deposit/:id/confirm-crypto", requireAuth as never, async (req: AuthRequest, res) => {
-  await ensureLedgerInfra();
-  const id = String(req.params.id || "");
-  const rows = await db.select().from(transactionsTable)
-    .where(and(
-      eq(transactionsTable.id, id),
-      eq(transactionsTable.userId, req.userId!),
-      eq(transactionsTable.type, "DEPOSIT"),
-    ))
-    .limit(1);
-
-  if (!rows.length) {
-    res.status(404).json({ error: "Not Found", message: "Deposit transaction not found" });
-    return;
-  }
-
-  const depositTx = rows[0];
-  if ((depositTx.paymentMethod || "").toUpperCase() !== "CRYPTO") {
-    res.status(400).json({ error: "Bad Request", message: "This endpoint only supports CRYPTO deposits" });
-    return;
-  }
-  if (depositTx.status === "COMPLETED") {
-    res.json({ ok: true, status: "COMPLETED", message: "Deposit already confirmed" });
-    return;
-  }
-  if (depositTx.status !== "PENDING" && depositTx.status !== "PROCESSING") {
-    res.status(409).json({ error: "Conflict", message: `Deposit is in status ${depositTx.status}` });
-    return;
-  }
-
-  const meta = depositTx.metadata && typeof depositTx.metadata === "object"
-    ? depositTx.metadata as Record<string, unknown>
-    : {};
-  const provider = String(meta.provider || "NOWPAYMENTS").toUpperCase();
-  const nowMeta = meta.nowpayments && typeof meta.nowpayments === "object"
-    ? meta.nowpayments as Record<string, unknown>
-    : {};
-  const oxaMeta = meta.oxapay && typeof meta.oxapay === "object"
-    ? meta.oxapay as Record<string, unknown>
-    : {};
-  const paymentId = String(nowMeta.paymentId || oxaMeta.trackId || "").trim();
-  if (!paymentId) {
-    res.status(400).json({ error: "Bad Request", message: "Missing crypto provider payment id on transaction" });
-    return;
-  }
-
-  let providerData: Record<string, unknown>;
-  try {
-    providerData = await getCustodialCryptoDepositStatus({ paymentId, provider: provider === "OXAPAY" ? "OXAPAY" : "NOWPAYMENTS" });
-  } catch (error) {
-    res.status(502).json({
-      error: "Bad Gateway",
-      message: "Unable to verify crypto payment status",
-      detail: error instanceof Error ? error.message : "NOWPAYMENTS_GET_PAYMENT_FAILED",
-    });
-    return;
-  }
-
-  const providerDataInner = providerData.data && typeof providerData.data === "object"
-    ? providerData.data as Record<string, unknown>
-    : providerData;
-  const providerStatusRaw = String(providerDataInner.payment_status || providerDataInner.status || "").toLowerCase();
-  const canonical = mapCryptoDepositProviderStatus(providerStatusRaw);
-  if (!canonical) {
-    res.status(409).json({
-      error: "Conflict",
-      message: `Crypto payment not settled yet (status: ${providerStatusRaw || "unknown"})`,
-      providerStatus: providerStatusRaw || "unknown",
-    });
-    return;
-  }
-
-  if (canonical === "COMPLETED") {
-    await db.transaction(async (txDb) => {
-      const txRows = await txDb.select().from(transactionsTable)
-        .where(eq(transactionsTable.id, depositTx.id))
-        .for("update")
-        .limit(1);
-      if (!txRows.length) throw new Error("TX_NOT_FOUND");
-      const current = txRows[0];
-      if (current.status === "COMPLETED") return;
-      if (current.status !== "PENDING" && current.status !== "PROCESSING") throw new Error(`BAD_STATUS:${current.status}`);
-
-      await creditAvailableFromTreasury(txDb, {
-        userId: current.userId,
-        transactionId: current.id,
-        amountUsd: parseFloat(current.amountUsd),
-        currency: "USD",
-        idempotencyKey: `deposit:settle:${current.id}`,
-        description: `Deposit confirmed by crypto provider ${current.referenceId || current.id}`,
-        metadata: {
-          provider,
-          providerTxId: String(providerDataInner.payment_id || providerDataInner.track_id || paymentId),
-          phase: "DEPOSIT_SETTLED",
-        },
-      });
-
-      const nextMeta = {
-        ...(current.metadata && typeof current.metadata === "object" ? current.metadata as Record<string, unknown> : {}),
-        provider,
-        webhookStatus: providerStatusRaw,
-        nowpayments: {
-          ...(current.metadata && typeof current.metadata === "object" && (current.metadata as Record<string, unknown>).nowpayments && typeof (current.metadata as Record<string, unknown>).nowpayments === "object"
-            ? (current.metadata as Record<string, unknown>).nowpayments as Record<string, unknown>
-            : {}),
-          paymentStatus: providerStatusRaw,
-          syncedAt: new Date().toISOString(),
-        },
-      };
-
-      await txDb.update(transactionsTable)
-        .set({ status: "COMPLETED", updatedAt: new Date(), metadata: nextMeta })
-        .where(eq(transactionsTable.id, current.id));
-
-      await txDb.insert(notificationsTable).values({
-        userId: current.userId,
-        type: "DEPOSIT_SETTLED",
-        title: "Dépôt crypto confirmé",
-        message: `Votre dépôt ${current.referenceId || current.id} a été confirmé.`,
-        category: "financial",
-        actionUrl: "/wallet",
-        read: false,
-      });
-    });
-
-    res.json({
-      ok: true,
-      status: "COMPLETED",
-      provider,
-      providerTxId: String(providerDataInner.payment_id || providerDataInner.track_id || paymentId),
-    });
-    return;
-  }
-
-  await db.update(transactionsTable)
-    .set({
-      status: canonical === "FAILED" ? "FAILED" : "CANCELLED",
-      updatedAt: new Date(),
-      metadata: {
-        ...meta,
-        provider,
-        webhookStatus: providerStatusRaw,
-      },
-    })
-    .where(eq(transactionsTable.id, depositTx.id));
-
-  res.json({
-    ok: true,
-    status: canonical,
-    provider,
-    providerStatus: providerStatusRaw || "unknown",
-  });
-});
-
-router.post("/wallet/withdraw/request-otp", requireAuth as never, async (req: AuthRequest, res) => {
-  await ensureOtpInfra();
-  await ensureLedgerInfra();
-  const { amount, currency } = req.body;
-  const kycGate = await requireWithdrawKycApproved(req.userId!);
-  if (kycGate) {
-    res.status(kycGate.status).json({ error: "Forbidden", message: kycGate.message, code: "KYC_REQUIRED_FOR_WITHDRAWAL" });
-    return;
-  }
-
-  if (!amount || !currency) {
-    res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
-    return;
-  }
-  if (!SUPPORTED_CURRENCIES.has(String(currency))) {
-    res.status(400).json({ error: "Bad Request", message: "Unsupported currency" });
-    return;
-  }
-  const amountNum = parsePositiveAmount(amount);
-  if (amountNum === null) {
-    res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
-    return;
-  }
-  const rate = FIXED_RATES[String(currency)] ?? 1;
-  const amountUsd = amountNum / rate;
-  if (amountUsd < MIN_WITHDRAW_USD || amountUsd > MAX_WITHDRAW_USD) {
-    res.status(400).json({
-      error: "Bad Request",
-      message: `Withdrawal amount must be between $${MIN_WITHDRAW_USD} and $${MAX_WITHDRAW_USD} (USD equivalent)`,
-    });
-    return;
-  }
-
-  await db.transaction(async (tx) => {
-    await ensureWalletAndLedgerAccounts(tx, req.userId!, "USD");
-  });
-
-  const wallets = await db.select().from(walletsTable).where(eq(walletsTable.userId, req.userId!)).limit(1);
-  if (!wallets.length || parseFloat(wallets[0].balanceUsd) < amountUsd) {
-    res.status(400).json({ error: "Bad Request", message: "Insufficient funds" });
-    return;
-  }
-
-  const code = generateOtp();
-  const now = new Date();
-  await db.transaction(async (tx) => {
-    await tx.update(otpCodesTable)
-      .set({ consumedAt: now })
-      .where(and(
-        eq(otpCodesTable.userId, req.userId!),
-        eq(otpCodesTable.purpose, "WITHDRAWAL"),
-        isNull(otpCodesTable.consumedAt),
-      ));
-
-    await tx.insert(otpCodesTable).values({
-      userId: req.userId!,
-      purpose: "WITHDRAWAL",
-      codeHash: hashOtp(code),
-      amountUsd: amountUsd.toFixed(2),
-      attempts: 0,
-      maxAttempts: 5,
-      expiresAt: new Date(now.getTime() + 10 * 60 * 1000),
-    });
-  });
-
-  // In production send via SMS/email; in development/demo mode return in response for testing
-  const isDemoMode = process.env.NODE_ENV !== "production";
-  res.json({
-    message: isDemoMode ? "OTP sent (demo mode)" : "OTP sent to your registered contact",
-    ...(isDemoMode ? { otp: code } : {}),
-    expiresInSeconds: 600,
-  });
-});
-
 router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, res) => {
-  await ensureOtpInfra();
   await ensureLedgerInfra();
-  const { amount, currency, paymentMethod, destination, otp, cryptoAsset } = req.body;
-  const kycGate = await requireWithdrawKycApproved(req.userId!);
-  if (kycGate) {
-    res.status(kycGate.status).json({ error: "Forbidden", message: kycGate.message, code: "KYC_REQUIRED_FOR_WITHDRAWAL" });
-    return;
-  }
+  const { amount, currency, paymentMethod, destination, cryptoAsset, recipientName, recipientPhone, destinationAddress } = req.body;
 
-  if (!otp) {
-    res.status(400).json({ error: "Bad Request", message: "OTP is required" });
-    return;
-  }
-
-  if (!amount || !currency || !paymentMethod || !destination) {
+  if (!amount || !currency || !paymentMethod) {
     res.status(400).json({ error: "Bad Request", message: "Missing required fields" });
     return;
   }
@@ -892,35 +386,26 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     return;
   }
 
-  let resolvedCryptoAsset: ReturnType<typeof resolveCryptoAsset> = null;
+  const paymentRuntime = await getPaymentRuntimeConfig();
+  const methodRuntime = paymentRuntime.withdraw[paymentMethodNormalized];
+  if (!methodRuntime) {
+    res.status(400).json({ error: "Bad Request", message: "Unsupported payment method configuration" });
+    return;
+  }
+
+  let selectedCryptoAsset: { symbol: string; network: string; address?: string } | null = null;
   if (paymentMethodNormalized === "CRYPTO") {
-    if (isCirclePrimary()) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: "Crypto withdrawal is restricted to USDC on Polygon via Circle. Use /api/wallet/circle/withdraw.",
-      });
+    const assets = methodRuntime.assets || [];
+    if (!assets.length) {
+      res.status(400).json({ error: "Bad Request", message: "No crypto network configured by admin for withdrawal" });
       return;
     }
-    resolvedCryptoAsset = resolveCryptoAsset(cryptoAsset, currency);
-    if (!resolvedCryptoAsset) {
+    const requested = String(cryptoAsset || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "_");
+    selectedCryptoAsset = assets.find((a) => `${a.symbol}_${a.network}`.toUpperCase() === requested) || assets[0];
+    if (!selectedCryptoAsset) {
       res.status(400).json({
         error: "Bad Request",
-        message: "Invalid or unsupported crypto asset for withdrawal. Allowed: MATIC(POLYGON)",
-      });
-      return;
-    }
-    const assetMeta = getCryptoAssetMeta(resolvedCryptoAsset);
-    if (String(currency).toUpperCase() !== assetMeta.ticker) {
-      res.status(400).json({
-        error: "Bad Request",
-        message: `Currency ${String(currency).toUpperCase()} does not match selected asset ${assetMeta.label}`,
-      });
-      return;
-    }
-    if (getCryptoWithdrawMode() === "AUTO" && !isCryptoPayoutConfigured()) {
-      res.status(503).json({
-        error: "Service Unavailable",
-        message: "Crypto payout provider is not configured for AUTO withdrawal mode",
+        message: "Invalid or unsupported crypto asset for withdrawal",
       });
       return;
     }
@@ -931,7 +416,26 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     res.status(400).json({ error: "Bad Request", message: "Amount must be a positive finite number" });
     return;
   }
-  const destinationValue = String(destination).trim();
+  const recipientNameValue = String(recipientName || "").trim();
+  const recipientPhoneValue = String(recipientPhone || "").trim();
+  const destinationAddressValue = String(destinationAddress || destination || "").trim();
+  const destinationValue = (() => {
+    if (paymentMethodNormalized === "CRYPTO") return destinationAddressValue;
+    if (paymentMethodNormalized === "MONCASH" || paymentMethodNormalized === "NATCASH") {
+      return `${recipientNameValue} (${recipientPhoneValue})`;
+    }
+    return String(destination || "").trim();
+  })();
+  if (paymentMethodNormalized === "MONCASH" || paymentMethodNormalized === "NATCASH") {
+    if (!recipientNameValue || !recipientPhoneValue) {
+      res.status(400).json({ error: "Bad Request", message: "Recipient name and phone are required for this withdrawal method" });
+      return;
+    }
+  }
+  if (paymentMethodNormalized === "CRYPTO" && !destinationAddressValue) {
+    res.status(400).json({ error: "Bad Request", message: "Destination address is required for crypto withdrawals" });
+    return;
+  }
   if (!destinationValue || destinationValue.length > 200) {
     res.status(400).json({ error: "Bad Request", message: "Invalid destination format" });
     return;
@@ -949,48 +453,6 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
   let createdTransaction: typeof transactionsTable.$inferSelect | null = null;
   try {
     createdTransaction = await db.transaction(async (tx) => {
-      const otpRows = await tx.select()
-        .from(otpCodesTable)
-        .where(and(
-          eq(otpCodesTable.userId, req.userId!),
-          eq(otpCodesTable.purpose, "WITHDRAWAL"),
-          isNull(otpCodesTable.consumedAt),
-        ))
-        .orderBy(desc(otpCodesTable.createdAt))
-        .for("update")
-        .limit(1);
-
-      if (!otpRows.length) throw new Error("NO_OTP");
-      const otpRow = otpRows[0];
-      const now = new Date();
-
-      if (now > otpRow.expiresAt) {
-        await tx.update(otpCodesTable).set({ consumedAt: now }).where(eq(otpCodesTable.id, otpRow.id));
-        throw new Error("OTP_EXPIRED");
-      }
-
-      const attemptsAfter = otpRow.attempts + 1;
-      if (attemptsAfter > otpRow.maxAttempts) {
-        await tx.update(otpCodesTable)
-          .set({ attempts: attemptsAfter, consumedAt: now })
-          .where(eq(otpCodesTable.id, otpRow.id));
-        throw new Error("OTP_TOO_MANY_ATTEMPTS");
-      }
-
-      if (otpRow.codeHash !== hashOtp(String(otp))) {
-        await tx.update(otpCodesTable)
-          .set({ attempts: attemptsAfter })
-          .where(eq(otpCodesTable.id, otpRow.id));
-        throw new Error("OTP_INVALID");
-      }
-
-      if (otpRow.amountUsd === null || Math.abs(amountUsd - parseFloat(otpRow.amountUsd)) > 0.01) {
-        await tx.update(otpCodesTable)
-          .set({ attempts: attemptsAfter, consumedAt: now })
-          .where(eq(otpCodesTable.id, otpRow.id));
-        throw new Error("OTP_AMOUNT_MISMATCH");
-      }
-
       await ensureWalletAndLedgerAccounts(tx, req.userId!, "USD");
 
       const wallets = await tx.select()
@@ -1017,7 +479,10 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
           destination: destinationValue,
           clientIp: req.ip || null,
           userAgent: req.get("user-agent") || null,
-          ...(resolvedCryptoAsset ? { cryptoAsset: resolvedCryptoAsset } : {}),
+          ...(selectedCryptoAsset ? { cryptoAsset: `${selectedCryptoAsset.symbol}_${selectedCryptoAsset.network}` } : {}),
+          ...(recipientNameValue ? { recipientName: recipientNameValue } : {}),
+          ...(recipientPhoneValue ? { recipientPhone: recipientPhoneValue } : {}),
+          ...(destinationAddressValue ? { destinationAddress: destinationAddressValue } : {}),
         },
       }).returning();
 
@@ -1044,34 +509,10 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
         read: false,
       });
 
-      await tx.update(otpCodesTable)
-        .set({ attempts: attemptsAfter, consumedAt: now })
-        .where(eq(otpCodesTable.id, otpRow.id));
-
       return insertedTx;
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : "WITHDRAW_FAILED";
-    if (reason === "NO_OTP") {
-      res.status(400).json({ error: "Bad Request", message: "No pending OTP. Request a new one." });
-      return;
-    }
-    if (reason === "OTP_EXPIRED") {
-      res.status(400).json({ error: "Bad Request", message: "OTP expired. Request a new one." });
-      return;
-    }
-    if (reason === "OTP_TOO_MANY_ATTEMPTS") {
-      res.status(429).json({ error: "Too Many Requests", message: "Too many OTP attempts. Request a new one." });
-      return;
-    }
-    if (reason === "OTP_INVALID") {
-      res.status(400).json({ error: "Bad Request", message: "Invalid OTP" });
-      return;
-    }
-    if (reason === "OTP_AMOUNT_MISMATCH") {
-      res.status(400).json({ error: "Bad Request", message: "Withdrawal amount does not match OTP request. Please request a new OTP." });
-      return;
-    }
     if (reason === "WALLET_NOT_FOUND") {
       res.status(400).json({ error: "Bad Request", message: "Wallet not found" });
       return;
@@ -1084,35 +525,6 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
   }
 
   let tx = createdTransaction!;
-  let autoModeDispatch:
-    | {
-      mode: "crypto-auto" | "crypto-semi-auto";
-      status: "PROCESSING";
-      payoutId: string;
-      withdrawalId: string;
-      asset: string;
-    }
-    | null = null;
-
-  if (paymentMethodNormalized === "CRYPTO" && getCryptoWithdrawMode() === "AUTO") {
-    try {
-      autoModeDispatch = await dispatchCryptoWithdrawal({
-        transactionId: tx.id,
-        actorId: req.userId || null,
-        source: "AUTO",
-      });
-      const rows = await db.select().from(transactionsTable).where(eq(transactionsTable.id, tx.id)).limit(1);
-      if (rows.length) tx = rows[0];
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : "CRYPTO_AUTO_DISPATCH_FAILED";
-      await db.update(transactionsTable)
-        .set({
-          adminNote: `Auto crypto dispatch failed: ${detail}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(transactionsTable.id, tx.id));
-    }
-  }
 
   res.status(201).json({
     id: tx.id,
@@ -1125,14 +537,8 @@ router.post("/wallet/withdraw", requireAuth as never, async (req: AuthRequest, r
     referenceId: tx.referenceId,
     fromBoard: tx.fromBoard,
     description: tx.description,
-    processingMode: autoModeDispatch ? autoModeDispatch.mode : "manual",
-    providerDispatch: autoModeDispatch ? {
-      provider: "NOWPAYMENTS",
-      payoutId: autoModeDispatch.payoutId,
-      withdrawalId: autoModeDispatch.withdrawalId,
-      status: autoModeDispatch.status,
-      asset: autoModeDispatch.asset,
-    } : null,
+    processingMode: "manual",
+    providerDispatch: null,
     createdAt: tx.createdAt,
     updatedAt: tx.updatedAt,
   });

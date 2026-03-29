@@ -5,6 +5,7 @@ import { useGetBoards, useGetMyBoardStatus, useGetWallet, usePayBoard } from '@w
 import type { Board, UserBoardStatus } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
+import { useAppStore } from '@/hooks/use-store';
 
 const LEVEL_ORDER_ASC = ['F', 'E', 'D', 'C', 'B', 'A', 'S'] as const;
 const LEVEL_ORDER_DESC = [...LEVEL_ORDER_ASC].reverse();
@@ -19,22 +20,23 @@ const LEVEL_STYLE: Record<string, { bar: string; text: string; chip: string; pan
   S: { bar: 'from-violet-500/30 to-fuchsia-900/20', text: 'text-violet-100', chip: 'bg-violet-500/20 border-violet-400/40 text-violet-100', panel: 'from-violet-500/10 to-fuchsia-900/20' },
 };
 
-const LEVEL_THEME_LABEL: Record<string, string> = {
-  F: "Foundation",
-  E: "Expansion",
-  D: "Development",
-  C: "Consolidation",
-  B: "Breakthrough",
-  A: "Ascension",
-  S: "Summit",
-};
+const STEP_ORDER = ["STARTER", "CHALLENGER", "LEADER", "RANKER"] as const;
 
 function parseUsd(value: unknown): number {
   const n = typeof value === 'number' ? value : Number.parseFloat(String(value ?? 0));
   return Number.isFinite(n) ? n : 0;
 }
 
+function normalizeRole(value: unknown): (typeof STEP_ORDER)[number] | null {
+  const role = String(value || '').trim().toUpperCase();
+  if (STEP_ORDER.includes(role as (typeof STEP_ORDER)[number])) {
+    return role as (typeof STEP_ORDER)[number];
+  }
+  return null;
+}
+
 export default function Boards() {
+  const { t } = useAppStore();
   const queryClient = useQueryClient();
   const [paying, setPaying] = useState<string | null>(null);
 
@@ -46,7 +48,7 @@ export default function Boards() {
   const statuses = statusData?.statuses || [];
 
   const activeStatus = useMemo(() => {
-    const active = statuses.filter((s) => !s.completed);
+    const active = statuses.filter((s) => !s.completed && Boolean(s.role));
     return active.length ? active[active.length - 1] : undefined;
   }, [statuses]);
 
@@ -58,11 +60,26 @@ export default function Boards() {
 
   const selectedBoardData = boards.find((b: Board) => b.id === selectedBoard);
   const selectedStatus = statuses.find((s: UserBoardStatus) => s.boardId === selectedBoard);
+  const selectedRole = normalizeRole(selectedStatus?.role);
+  const selectedPosition = Number((selectedStatus as unknown as { position?: number })?.position);
+  const currentBoardId = activeStatus?.boardId || 'F';
+  const currentRole = normalizeRole(activeStatus?.role);
+  const currentPosition = Number((activeStatus as unknown as { position?: number })?.position);
   const walletBalance = parseUsd(wallet?.balanceUsd);
   const selectedEntry = parseUsd(selectedBoardData?.entryFee);
   const canAfford = walletBalance >= selectedEntry;
   const alreadyJoined = Boolean(selectedStatus?.role);
   const manualActivationAllowed = selectedBoardData?.id === 'F';
+  const levelThemeLabel: Record<string, string> = {
+    F: t("boards.theme.f"),
+    E: t("boards.theme.e"),
+    D: t("boards.theme.d"),
+    C: t("boards.theme.c"),
+    B: t("boards.theme.b"),
+    A: t("boards.theme.a"),
+    S: t("boards.theme.s"),
+  };
+  const stepLabel = (step: (typeof STEP_ORDER)[number]) => t(`boards.step.${step.toLowerCase()}`);
 
   const { mutate: payBoard } = usePayBoard({
     mutation: {
@@ -85,8 +102,8 @@ export default function Boards() {
     <AppLayout>
       <div className="space-y-6">
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="space-y-1">
-          <h1 className="text-4xl font-display font-black tracking-tight">CREATION BOARDS</h1>
-          <p className="text-sm text-muted-foreground tracking-[0.16em] uppercase">7 progressive levels from F to S</p>
+          <h1 className="text-4xl font-display font-black tracking-tight">{t("boards.page_title")}</h1>
+          <p className="text-sm text-muted-foreground tracking-[0.16em] uppercase">{t("boards.page_subtitle")}</p>
         </motion.div>
 
         <div className="rounded-3xl border border-border bg-card/40 p-4 sm:p-6 shadow-xl">
@@ -125,9 +142,9 @@ export default function Boards() {
             <div className="mb-4 flex items-center justify-between">
               <div>
                 <p className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">
-                  {LEVEL_THEME_LABEL[selectedBoardData.id] || `Level ${selectedBoardData.id}`}
+                  {levelThemeLabel[selectedBoardData.id] || `${t("boards.level")} ${selectedBoardData.id}`}
                 </p>
-                <h2 className="text-3xl font-display font-black">Board{selectedBoardData.id}</h2>
+                <h2 className="text-3xl font-display font-black">{t("boards.board_label")} {selectedBoardData.id}</h2>
               </div>
               <div className={`rounded-xl border px-4 py-2 text-2xl font-display font-black ${LEVEL_STYLE[selectedBoardData.id]?.chip || ''}`}>
                 {selectedBoardData.id}
@@ -136,26 +153,58 @@ export default function Boards() {
 
             <div className="mb-6 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-2xl border border-white/15 bg-black/30 px-4 py-4">
-                <p className="text-3xl font-display font-black">entry cost: ${selectedEntry.toFixed(0)}</p>
+                <p className="text-3xl font-display font-black">{t("boards.entry_cost")}: ${selectedEntry.toFixed(0)}</p>
               </div>
               <div className="rounded-2xl border border-white/15 bg-black/30 px-4 py-4">
-                <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">activation status</p>
-                <p className="text-2xl font-display font-black">{alreadyJoined ? 'Active' : 'Not active'}</p>
+                <p className="text-sm uppercase tracking-[0.12em] text-muted-foreground">{t("boards.current_progress")}</p>
+                <p className="text-xl font-display font-black">
+                  {t("boards.level")}: {t("boards.board_label")} {currentBoardId}
+                </p>
+                <p className="text-xl font-display font-black">
+                  {t("boards.step")}: {currentRole ? `${stepLabel(currentRole)} ${currentBoardId}` : t("boards.not_active")}
+                </p>
+                {Number.isFinite(currentPosition) && currentPosition > 0 && (
+                  <p className="text-sm text-muted-foreground">{t("boards.position")}: #{currentPosition}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="mb-6 rounded-2xl border border-white/10 bg-black/20 p-4">
+              <p className="mb-3 text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                {t("boards.step_progression")} {t("boards.board_label")} {selectedBoardData.id}
+              </p>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {STEP_ORDER.map((step) => {
+                  const isActiveStep = selectedRole === step;
+                  return (
+                    <div
+                      key={step}
+                      className={`rounded-xl border px-3 py-2 text-center text-sm font-semibold transition ${
+                        isActiveStep
+                          ? 'border-primary bg-primary/15 text-primary shadow-[0_0_14px_rgba(0,255,170,0.25)]'
+                          : 'border-white/10 bg-black/20 text-muted-foreground'
+                      }`}
+                    >
+                      {stepLabel(step)} {selectedBoardData.id}
+                      {isActiveStep && Number.isFinite(selectedPosition) && selectedPosition > 0 ? ` · #${selectedPosition}` : ''}
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
             <div className="mt-5 space-y-3">
               {alreadyJoined ? (
                 <div className="flex items-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-500/10 px-4 py-3 text-emerald-200">
-                  <CheckCircle2 className="h-5 w-5" /> Your level is already activated.
+                  <CheckCircle2 className="h-5 w-5" /> {t("boards.already_activated")}
                 </div>
               ) : !manualActivationAllowed ? (
                 <div className="flex items-center gap-2 rounded-xl border border-blue-500/35 bg-blue-500/10 px-4 py-3 text-blue-200">
-                  <CheckCircle2 className="h-5 w-5" /> This level is activated automatically by progression after Board F completion.
+                  <CheckCircle2 className="h-5 w-5" /> {t("boards.auto_activation_notice")}
                 </div>
               ) : !canAfford ? (
                 <div className="flex items-center gap-2 rounded-xl border border-red-500/35 bg-red-500/10 px-4 py-3 text-red-200">
-                  <AlertCircle className="h-5 w-5" /> Insufficient balance. Deposit at least ${selectedEntry.toFixed(0)} to activate this level.
+                  <AlertCircle className="h-5 w-5" /> {t("boards.insufficient_notice").replace("{amount}", selectedEntry.toFixed(0))}
                 </div>
               ) : (
                 <button
@@ -164,18 +213,18 @@ export default function Boards() {
                   disabled={paying === selectedBoardData.id}
                   className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 font-semibold text-primary-foreground transition hover:shadow-[0_0_20px_rgba(0,255,170,0.35)] disabled:opacity-60"
                 >
-                  {paying === selectedBoardData.id ? 'Processing...' : 'Activate this level'}
+                  {paying === selectedBoardData.id ? t("boards.processing") : t("boards.activate_level")}
                   <ArrowRight className="h-4 w-4" />
                 </button>
               )}
 
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <p className="text-xs text-muted-foreground">Activation cost</p>
+                  <p className="text-xs text-muted-foreground">{t("boards.activation_cost")}</p>
                   <p className="font-display text-xl font-black">${selectedEntry.toFixed(2)}</p>
                 </div>
                 <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                  <p className="text-xs text-muted-foreground">Wallet balance</p>
+                  <p className="text-xs text-muted-foreground">{t("boards.wallet_balance")}</p>
                   <p className="font-display text-xl font-black">${walletBalance.toFixed(2)}</p>
                 </div>
               </div>
@@ -186,7 +235,7 @@ export default function Boards() {
         {!selectedBoardData && (
           <div className="rounded-2xl border border-border bg-card/40 p-8 text-center text-muted-foreground">
             <Layers className="mx-auto mb-2 h-7 w-7 opacity-60" />
-            Loading levels...
+            {t("boards.loading_levels")}
           </div>
         )}
       </div>

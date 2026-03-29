@@ -27,6 +27,8 @@ import OnboardingPage from "@/pages/onboarding";
 import Dashboard from "@/pages/dashboard";
 import Boards from "@/pages/boards";
 import WalletPage from "@/pages/wallet";
+import DepositPage from "@/pages/deposit";
+import WithdrawPage from "@/pages/withdraw";
 import HistoryPage from "@/pages/history";
 import HistoryReport from "@/pages/history-report";
 import ReferralsPage from "@/pages/referrals";
@@ -35,6 +37,10 @@ import ProfilePage from "@/pages/profile";
 import AdminPage from "@/pages/admin";
 import EvolutionPage from "@/pages/evolution";
 import NotifLinkPage from "@/pages/notif-link";
+import AdminPaymentConfigPage from "@/pages/admin-payment-config";
+import AdminLandingContentPage from "@/pages/admin-landing-content";
+import AdminAcademyPage from "@/pages/admin-academy";
+import AcademyPage from "@/pages/academy";
 import AboutPage from "@/pages/about";
 import HowItWorksPage from "@/pages/how-it-works";
 import TermsPage from "@/pages/terms";
@@ -164,16 +170,22 @@ function Router() {
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/boards" component={Boards} />
       <Route path="/wallet" component={WalletPage} />
+      <Route path="/deposit" component={DepositPage} />
+      <Route path="/withdraw" component={WithdrawPage} />
       <Route path="/history" component={HistoryPage} />
       <Route path="/history/report" component={HistoryReport} />
       <Route path="/referrals" component={ReferralsPage} />
       <Route path="/notifications" component={NotificationsPage} />
       <Route path="/profile" component={ProfilePage} />
+      <Route path="/academy" component={AcademyPage} />
       <Route path="/admin" component={AdminPage} />
       <Route path="/admin/evolution" component={EvolutionPage} />
       <Route path="/admin/notif-link" component={NotifLinkPage} />
+      <Route path="/admin/payment-config" component={AdminPaymentConfigPage} />
+      <Route path="/admin/landing-content" component={AdminLandingContentPage} />
+      <Route path="/admin/academy" component={AdminAcademyPage} />
       <Route path="/admin/users"><RedirectTo to="/admin?tab=users" /></Route>
-      <Route path="/admin/payments"><RedirectTo to="/admin?tab=deposits" /></Route>
+      <Route path="/admin/payments"><RedirectTo to="/admin/payment-config" /></Route>
       <Route path="/admin/boards"><RedirectTo to="/admin?tab=boards" /></Route>
       <Route path="/admin/reports"><RedirectTo to="/admin?tab=reports" /></Route>
       <Route path="/admin/withdrawals"><RedirectTo to="/admin?tab=withdrawals" /></Route>

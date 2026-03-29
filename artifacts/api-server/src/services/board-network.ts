@@ -51,6 +51,15 @@ export type StrategicLeafNumbers = {
 
 export type TreeRole = "RANKER" | "LEADER" | "CHALLENGER" | "STARTER";
 
+export type StrategicPlacement = {
+  rootUserId: string;
+  rootNumber: number;
+  role: TreeRole;
+  position: number;
+  slot: string;
+  strategicNumber: number;
+};
+
 export function computeStrategicLeafNumbers(n1: number): StrategicLeafNumbers {
   const n2 = n1 * 2;
   const n3 = n1 * 2 + 1;
@@ -99,6 +108,61 @@ export function treeSlotByNumber(rootNumber: number, targetNumber: number): { ro
   if (targetNumber === n.n5_2) return { role: "STARTER", position: 7, slot: "N5*2" };
   if (targetNumber === n.n5_2p1) return { role: "STARTER", position: 8, slot: "N5*2+1" };
   return null;
+}
+
+const ROLE_PROGRESS_SCORE: Record<TreeRole, number> = {
+  STARTER: 1,
+  CHALLENGER: 2,
+  LEADER: 3,
+  RANKER: 4,
+};
+
+export function findStrategicPlacementForBoard(
+  accounts: ValidatedAccount[],
+  targetUserId: string,
+  boardId: string,
+): StrategicPlacement | null {
+  const target = accounts.find((u) => u.id === targetUserId);
+  if (!target) return null;
+
+  const normalizedBoard = String(boardId || "").toUpperCase();
+  const roots = accounts.filter((u) => (u.currentBoard || "F").toUpperCase() === normalizedBoard);
+  if (!roots.length) return null;
+
+  const candidates = roots
+    .map((root) => {
+      const slot = treeSlotByNumber(root.accountNumber, target.accountNumber);
+      if (!slot) return null;
+      return {
+        rootUserId: root.id,
+        rootNumber: root.accountNumber,
+        role: slot.role,
+        position: slot.position,
+        slot: slot.slot,
+        strategicNumber: target.accountNumber,
+        selfRoot: root.accountNumber === target.accountNumber,
+      };
+    })
+    .filter((x): x is StrategicPlacement & { selfRoot: boolean } => Boolean(x));
+
+  if (!candidates.length) return null;
+
+  const nonSelf = candidates.filter((c) => !c.selfRoot);
+  const pool = nonSelf.length ? nonSelf : candidates;
+  pool.sort((a, b) => {
+    const scoreDelta = ROLE_PROGRESS_SCORE[b.role] - ROLE_PROGRESS_SCORE[a.role];
+    if (scoreDelta !== 0) return scoreDelta;
+    return a.rootNumber - b.rootNumber;
+  });
+  const picked = pool[0];
+  return {
+    rootUserId: picked.rootUserId,
+    rootNumber: picked.rootNumber,
+    role: picked.role,
+    position: picked.position,
+    slot: picked.slot,
+    strategicNumber: picked.strategicNumber,
+  };
 }
 
 export async function fetchValidatedAccounts(executor: DbExecutor = db): Promise<ValidatedAccount[]> {

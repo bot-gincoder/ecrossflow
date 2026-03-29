@@ -80,7 +80,10 @@
     "@stripe/stripe-js": "^8.11.0",
     "@types/canvas-confetti": "^1.9.0",
     "canvas-confetti": "^1.9.4",
+    "d3-geo": "^3.1.1",
     "qrcode.react": "^4.2.0",
+    "topojson-client": "^3.1.0",
+    "world-atlas": "^2.0.2",
     "zustand": "^5.0.12"
   }
 }

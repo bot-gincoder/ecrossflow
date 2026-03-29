@@ -5,10 +5,12 @@ import { useGetReferrals } from '@workspace/api-client-react';
 import type { ReferralItem } from '@workspace/api-client-react';
 import { AppLayout } from '@/components/layout';
 import { QRCodeSVG } from 'qrcode.react';
+import { useAppStore } from '@/hooks/use-store';
 
-const REQUIRED_ACTIVE = 2;
+const REQUIRED_ACTIVE = 1;
 
 export default function ReferralsPage() {
+  const { t, language } = useAppStore();
   const { data } = useGetReferrals();
   const enhanced = (data || {}) as typeof data & {
     whatsappShareUrl?: string;
@@ -63,16 +65,16 @@ export default function ReferralsPage() {
     <AppLayout>
       <div className="space-y-8">
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}>
-          <h1 className="text-3xl font-display font-bold">Parrainage</h1>
-          <p className="text-muted-foreground mt-1">Invitez vos amis et gagnez des bonus</p>
+          <h1 className="text-3xl font-display font-bold">{t('referrals.title')}</h1>
+          <p className="text-muted-foreground mt-1">{t('referrals.subtitle')}</p>
         </motion.div>
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {[
-            { label: 'Total Parrainés', value: data?.totalReferrals || 0, icon: Users, color: 'text-primary' },
-            { label: 'Actifs', value: data?.activeReferrals || 0, icon: Check, color: 'text-emerald-400' },
-            { label: 'Bonus Gagnés', value: `$${(data?.totalBonusEarned || 0).toFixed(2)}`, icon: Gift, color: 'text-yellow-400' },
+            { label: t('referrals.total'), value: data?.totalReferrals || 0, icon: Users, color: 'text-primary' },
+            { label: t('referrals.active'), value: data?.activeReferrals || 0, icon: Check, color: 'text-emerald-400' },
+            { label: t('referrals.bonus'), value: `$${(data?.totalBonusEarned || 0).toFixed(2)}`, icon: Gift, color: 'text-yellow-400' },
           ].map(({ label, value, icon: Icon, color }) => (
             <motion.div
               key={label}
@@ -93,11 +95,11 @@ export default function ReferralsPage() {
         >
           <div className="flex items-center justify-between mb-3">
             <div>
-              <p className="font-semibold text-sm">Activation du compte parrainage</p>
+              <p className="font-semibold text-sm">{t('referrals.activation_title')}</p>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {isActivated
-                  ? '🎉 Votre programme de parrainage est activé !'
-                  : `${activeReferrals}/${REQUIRED_ACTIVE} filleuls actifs requis pour activer les bonus`}
+                  ? t('referrals.activation_done')
+                  : t('referrals.activation_needed').replace('{current}', String(activeReferrals)).replace('{required}', String(REQUIRED_ACTIVE))}
               </p>
             </div>
             <span className={`text-sm font-bold font-display ${isActivated ? 'text-primary' : 'text-muted-foreground'}`}>
@@ -114,7 +116,7 @@ export default function ReferralsPage() {
           </div>
           {!isActivated && (
             <p className="text-xs text-muted-foreground mt-2">
-              Encore {REQUIRED_ACTIVE - activeReferrals} filleul(s) actif(s) pour débloquer les bonus de parrainage.
+              {t('referrals.activation_left').replace('{left}', String(REQUIRED_ACTIVE - activeReferrals))}
             </p>
           )}
         </motion.div>
@@ -126,7 +128,7 @@ export default function ReferralsPage() {
         >
           <div className="flex items-center gap-3 mb-6">
             <Share2 className="w-6 h-6 text-primary" />
-            <h2 className="text-xl font-display font-bold">Votre Code de Parrainage</h2>
+            <h2 className="text-xl font-display font-bold">{t('referrals.your_code')}</h2>
           </div>
 
           {/* Code */}
@@ -152,7 +154,7 @@ export default function ReferralsPage() {
               <button
                 onClick={() => setShowQR(v => !v)}
                 className="p-1.5 hover:text-primary transition-colors"
-                title="Afficher QR Code"
+                title={t('referrals.qr_show')}
               >
                 <QrCode className="w-4 h-4" />
               </button>
@@ -202,24 +204,24 @@ export default function ReferralsPage() {
               className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-muted border border-border hover:bg-muted/80 font-medium text-sm transition-all"
             >
               {copied === 'link' ? <Check className="w-4 h-4 text-primary" /> : <Copy className="w-4 h-4" />}
-              Copier le lien
+              {t('referrals.copy_link')}
             </button>
           </div>
 
           <p className="text-xs text-muted-foreground mt-4">
-            Partagez ce lien ou ce code. Vous recevrez un bonus lorsque vos filleuls rejoignent leur premier board.
+            {t('referrals.share_hint')}
           </p>
         </motion.div>
 
         {/* Referrals List */}
         <div>
-          <h2 className="text-xl font-display font-bold mb-4">Vos Filleuls</h2>
+          <h2 className="text-xl font-display font-bold mb-4">{t('referrals.list_title')}</h2>
           <div className="space-y-2">
             {(!data?.referrals || data.referrals.length === 0) && (
               <div className="text-center py-12 text-muted-foreground border border-dashed border-border rounded-2xl">
                 <Users className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                <p>Aucun filleul pour l'instant</p>
-                <p className="text-sm mt-1">Partagez votre code pour commencer !</p>
+                <p>{t('referrals.no_referrals')}</p>
+                <p className="text-sm mt-1">{t('referrals.share')}</p>
               </div>
             )}
             {data?.referrals?.map((r: ReferralItem, idx: number) => (
@@ -234,15 +236,15 @@ export default function ReferralsPage() {
                   </div>
                   <div>
                     <p className="font-medium text-sm">@{r.username}</p>
-                    <p className="text-xs text-muted-foreground">Rejoint le {new Date(r.joinedAt).toLocaleDateString('fr-FR')}</p>
+                    <p className="text-xs text-muted-foreground">{t('referrals.joined_on')} {new Date(r.joinedAt).toLocaleDateString(language === 'fr' ? 'fr-FR' : language)}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${r.status === 'ACTIVE' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
-                    {r.status === 'ACTIVE' ? 'Actif' : 'En attente'}
+                    {r.status === 'ACTIVE' ? t('common.status_active') : t('common.status_pending')}
                   </span>
                   {r.bonusPaid && (
-                    <span className="text-xs bg-yellow-500/10 text-yellow-400 px-2 py-0.5 rounded-full font-medium">Bonus payé</span>
+                    <span className="text-xs bg-yellow-500/10 text-yellow-400 px-2 py-0.5 rounded-full font-medium">{t('referrals.bonus_paid')}</span>
                   )}
                 </div>
               </motion.div>

@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   LayoutDashboard, Wallet, Layers, History, Users, 
   User, Bell, LogOut, Menu, X, ShieldAlert,
-  CreditCard, BarChart, Sparkles
+  CreditCard, BarChart, Sparkles, Settings2, GraduationCap, FileText
 } from 'lucide-react';
 import { useAppStore } from '@/hooks/use-store';
 import type { Theme, Language } from '@/hooks/use-store';
@@ -129,8 +129,11 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
     { href: '/admin?tab=withdrawals', icon: Wallet, label: 'Retraits' },
     { href: '/admin?tab=boards', icon: Layers, label: 'Boards' },
     { href: '/admin?tab=reports', icon: History, label: 'Rapports' },
+    { href: '/admin/payment-config', icon: Settings2, label: 'Paiements' },
     { href: '/admin/evolution', icon: Sparkles, label: 'Evolution' },
     { href: '/admin/notif-link', icon: Bell, label: 'Notif & Link' },
+    { href: '/admin/landing-content', icon: FileText, label: 'Landing Content' },
+    { href: '/admin/academy', icon: GraduationCap, label: 'Academy' },
     { href: '/dashboard', icon: LayoutDashboard, label: 'Quitter Admin' },
   ] : [
     { href: '/dashboard', icon: LayoutDashboard, label: t('nav.dashboard') },
@@ -138,6 +141,7 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
     { href: '/boards', icon: Layers, label: t('nav.boards') },
     { href: '/history', icon: History, label: t('nav.history') },
     { href: '/referrals', icon: Users, label: t('nav.referrals') },
+    { href: '/academy', icon: GraduationCap, label: t('nav.academy') },
   ];
 
   const languageOptions = dynamicLanguages.length
@@ -153,8 +157,14 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
       <aside className="hidden lg:flex flex-col w-72 fixed top-0 left-0 h-screen border-r border-border bg-card/50 backdrop-blur-xl z-40">
         <div className="p-6">
           <Link href="/dashboard" className="flex items-center gap-3 group">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center shadow-lg shadow-primary/20 group-hover:shadow-primary/40 transition-all">
-              <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="Logo" className="w-6 h-6 object-contain invert brightness-0" />
+            <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#f4b847]/45 bg-[#110b03]/90 p-1 shadow-[0_0_22px_rgba(236,167,56,0.28)] transition-all group-hover:shadow-[0_0_28px_rgba(236,167,56,0.42)]">
+              <img
+                src={`${import.meta.env.BASE_URL}images/logo.png`}
+                alt="Logo"
+                className="h-full w-full object-contain"
+                loading="eager"
+                fetchPriority="high"
+              />
             </div>
             <span className="font-display font-bold text-xl tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
               ECROSSFLOW
@@ -231,8 +241,14 @@ export const AppLayout = ({ children, requireAdmin = false }: { children: ReactN
       {/* Mobile Header */}
       <header className="lg:hidden fixed top-0 left-0 right-0 h-16 border-b border-border bg-card/80 backdrop-blur-xl z-40 flex items-center justify-between px-4">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-             <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="Logo" className="w-5 h-5 object-contain invert brightness-0" />
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-[#f4b847]/45 bg-[#110b03]/90 p-1 shadow-[0_0_16px_rgba(236,167,56,0.25)]">
+             <img
+               src={`${import.meta.env.BASE_URL}images/logo.png`}
+               alt="Logo"
+               className="h-full w-full object-contain"
+               loading="eager"
+               fetchPriority="high"
+             />
           </div>
           <span className="font-display font-bold text-lg">ECROSSFLOW</span>
         </div>

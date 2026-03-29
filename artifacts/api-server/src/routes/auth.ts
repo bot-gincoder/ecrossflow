@@ -5,7 +5,7 @@ import { db } from "@workspace/db";
 import { usersTable, walletsTable, referralsTable, notificationsTable, otpCodesTable } from "@workspace/db";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { signToken, requireAuth, type AuthRequest } from "../middlewares/auth.js";
-import { sendEmail, buildOtpEmail, buildEmailVerificationLinkEmailLocalized, buildAccountActivatedEmail } from "../services/email.js";
+import { sendEmail, buildOtpEmail, buildEmailVerificationLinkEmailLocalized, buildAccountActivatedEmail, buildActionCardEmail } from "../services/email.js";
 import { OAuth2Client } from "google-auth-library";
 import { createHash } from "crypto";
 import { ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.js";
@@ -142,20 +142,63 @@ async function sendEmailVerificationLink(userId: string, role: string, email: st
   const cfg = await getSystemSetting<Record<string, unknown>>("notif_email_verification", {
     subject: "",
     bodyHtml: "",
+    buttonLabel: "",
   });
   const subjectTpl = String(cfg?.subject || "").trim();
   const bodyTpl = String(cfg?.bodyHtml || "").trim();
+  const buttonLabelTpl = String(cfg?.buttonLabel || "").trim();
+  const locale = String(preferredLanguage || "fr").toLowerCase();
+  const i18n = (() => {
+    if (locale === "en") {
+      return {
+        title: "Confirm your email address",
+        intro: "Your account is almost ready. Confirm your email to continue.",
+        actionLabel: "Confirm my account",
+        footerNote: "Security note: this confirmation link is personal and expires automatically.",
+      };
+    }
+    if (locale === "es") {
+      return {
+        title: "Confirma tu correo electrónico",
+        intro: "Tu cuenta está casi lista. Confirma tu correo para continuar.",
+        actionLabel: "Confirmar mi cuenta",
+        footerNote: "Nota de seguridad: este enlace de confirmación es personal y caduca automáticamente.",
+      };
+    }
+    if (locale === "ht") {
+      return {
+        title: "Konfime adrès imèl ou",
+        intro: "Kont ou prèske pare. Konfime imèl ou pou kontinye.",
+        actionLabel: "Konfime kont mwen",
+        footerNote: "Nòt sekirite: lyen konfimasyon sa a pèsonèl epi li ekspire otomatikman.",
+      };
+    }
+    return {
+      title: "Confirmez votre adresse email",
+      intro: "Votre compte est presque prêt. Confirmez votre email pour continuer.",
+      actionLabel: "Confirmer mon compte",
+      footerNote: "Note de sécurité : ce lien de confirmation est personnel et expire automatiquement.",
+    };
+  })();
   const fallback = buildEmailVerificationLinkEmailLocalized(link, email, preferredLanguage);
   const payload = subjectTpl && bodyTpl
-    ? {
+    ? buildActionCardEmail({
       to: email,
       subject: renderTemplate(subjectTpl, { app_name: "Ecrossflow" }),
-      html: renderTemplate(bodyTpl, {
+      title: i18n.title,
+      intro: i18n.intro,
+      locale,
+      rawHtml: renderTemplate(bodyTpl, {
         app_name: "Ecrossflow",
         verification_link: link,
         email,
       }),
-    }
+      action: {
+        label: buttonLabelTpl ? renderTemplate(buttonLabelTpl, { app_name: "Ecrossflow" }) : i18n.actionLabel,
+        url: link,
+      },
+      footerNote: i18n.footerNote,
+    })
     : fallback;
   await sendEmail(payload).catch(() => {
     console.warn(`[EMAIL] Verification link delivery failed for ${email}`);

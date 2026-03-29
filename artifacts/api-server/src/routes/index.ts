@@ -11,6 +11,7 @@ import adminRouter from "./admin.js";
 import paymentsRouter from "./payments.js";
 import circleRouter from "./circle.js";
 import i18nRouter from "./i18n.js";
+import contentRouter from "./content.js";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(adminRouter);
 router.use(paymentsRouter);
 router.use(circleRouter);
 router.use(i18nRouter);
+router.use(contentRouter);
 
 export default router;

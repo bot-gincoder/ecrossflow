@@ -3,7 +3,7 @@ import { AppLayout } from "@/components/layout";
 import { useAppStore } from "@/hooks/use-store";
 import { Bell, Link2, Mail, MessageSquare, RefreshCw, Save } from "lucide-react";
 
-type DomainKey = "sms_otp" | "email_otp" | "email_verification" | "email_notif" | "referral_link";
+type DomainKey = "sms_otp" | "email_otp" | "email_verification" | "email_notif" | "email_transaction" | "referral_link";
 
 type DomainState = {
   key: string;
@@ -15,7 +15,7 @@ type DomainsResponse = {
   domains: Record<DomainKey, DomainState>;
 };
 
-const DOMAIN_ORDER: DomainKey[] = ["sms_otp", "email_otp", "email_verification", "email_notif", "referral_link"];
+const DOMAIN_ORDER: DomainKey[] = ["sms_otp", "email_otp", "email_verification", "email_notif", "email_transaction", "referral_link"];
 
 const DEFAULT_EXAMPLES: Record<DomainKey, Record<string, unknown>> = {
   sms_otp: {
@@ -32,6 +32,11 @@ const DEFAULT_EXAMPLES: Record<DomainKey, Record<string, unknown>> = {
   email_notif: {
     subject: "Compte active avec succes",
     bodyHtml: "<h2>Activation confirmee</h2><p>Votre compte est actif.</p><p>Etape suivante: rechargez votre wallet avec au moins {{min_deposit_usd}} USD pour commencer.</p>",
+  },
+  email_transaction: {
+    subject: "Nouvelle transaction {{tx_type}} - {{tx_status}}",
+    bodyHtml: "<p>Une nouvelle operation a ete enregistree sur votre compte.</p><p><strong>Type:</strong> {{tx_type}}<br><strong>Statut:</strong> {{tx_status}}<br><strong>Montant:</strong> {{amount}} {{currency}} ({{amount_usd}} USD)<br><strong>Reference:</strong> {{reference_id}}</p>",
+    actionLabel: "Voir mon historique",
   },
   referral_link: {
     baseUrl: "https://ecrossflow.com",
@@ -62,6 +67,11 @@ const DOMAIN_META: Record<DomainKey, { title: string; hint: string; icon: React.
   email_notif: {
     title: "Email Notif",
     hint: "Variables: {{app_name}}, {{min_deposit_usd}}, {{email}}",
+    icon: Bell,
+  },
+  email_transaction: {
+    title: "Email Transaction",
+    hint: "Variables: {{app_name}}, {{username}}, {{tx_type}}, {{tx_status}}, {{amount}}, {{currency}}, {{amount_usd}}, {{reference_id}}, {{description}}, {{history_url}}",
     icon: Bell,
   },
   referral_link: {
@@ -307,7 +317,7 @@ export default function NotifLinkPage() {
                   />
                 )}
 
-                {(domain === "email_otp" || domain === "email_verification" || domain === "email_notif") && (
+                {(domain === "email_otp" || domain === "email_verification" || domain === "email_notif" || domain === "email_transaction") && (
                   <div className="space-y-2">
                     <input
                       value={String(data.subject || "")}
@@ -321,6 +331,14 @@ export default function NotifLinkPage() {
                       placeholder="Contenu HTML"
                       className="h-40 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
                     />
+                    {domain === "email_transaction" && (
+                      <input
+                        value={String(data.actionLabel || "")}
+                        onChange={(e) => updateDraft(domain, "actionLabel", e.target.value)}
+                        placeholder="Label bouton (ex: Voir mon historique)"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                      />
+                    )}
                   </div>
                 )}
 

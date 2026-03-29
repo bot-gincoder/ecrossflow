@@ -27,8 +27,8 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json({ limit: "12mb" }));
-app.use(express.urlencoded({ extended: true, limit: "12mb" }));
+app.use(express.json({ limit: "30mb" }));
+app.use(express.urlencoded({ extended: true, limit: "30mb" }));
 
 app.use(async (req, res, next) => {
   if (!req.path.startsWith("/api/")) {
@@ -51,5 +51,17 @@ app.use(async (req, res, next) => {
 });
 
 app.use("/api", router);
+
+app.use((err: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const maybeErr = err as { type?: string; status?: number } | undefined;
+  if (maybeErr?.type === "entity.too.large" || maybeErr?.status === 413) {
+    res.status(413).json({
+      error: "Payload Too Large",
+      message: "The uploaded proof image is too large. Please upload a lighter image.",
+    });
+    return;
+  }
+  next(err);
+});
 
 export default app;

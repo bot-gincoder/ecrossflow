@@ -40,8 +40,14 @@ import {
 } from "../services/moncash.js";
 import { getCryptoWithdrawMode } from "../services/crypto-provider.js";
 import { dispatchCryptoWithdrawal } from "../lib/crypto-withdraw.js";
-import { invalidateSystemConfigCache } from "../services/system-config.js";
+import { getSystemSetting, invalidateSystemConfigCache } from "../services/system-config.js";
 import { BOARD_ORDER, backfillValidatedQueueNumbers, computeStrategicLeafNumbers, evaluateBoardProgressions, fetchValidatedAccounts } from "../services/board-network.js";
+import {
+  enabledDepositMethods as paymentEnabledDepositMethods,
+  enabledWithdrawMethods as paymentEnabledWithdrawMethods,
+  normalizePaymentRuntimeConfig,
+  PAYMENT_RUNTIME_DEFAULTS,
+} from "../services/payment-config.js";
 
 const router: IRouter = Router();
 
@@ -71,8 +77,29 @@ const NOTIF_LINK_DOMAIN_TO_KEY = {
   email_otp: "notif_email_otp",
   email_verification: "notif_email_verification",
   email_notif: "notif_email_notification",
+  email_transaction: "notif_email_transaction",
   referral_link: "notif_referral_link",
 } as const;
+
+const LANDING_CONTENT_KEY = "landing_content_overrides";
+const ACADEMY_CONTENT_KEY = "academy_content";
+const LANDING_CONTENT_ALLOWED_KEYS = new Set([
+  "secFaqTitle",
+  "q1", "a1",
+  "q2", "a2",
+  "q3", "a3",
+  "q4", "a4",
+  "q5", "a5",
+  "q6", "a6",
+  "q7", "a7",
+  "q8", "a8",
+  "finalTitle",
+  "finalDesc",
+  "finalLine1",
+  "finalLine2",
+  "finalLine3",
+  "finalCta",
+]);
 
 const NOTIF_LINK_DEFAULTS: Record<(typeof NOTIF_LINK_DOMAIN_TO_KEY)[keyof typeof NOTIF_LINK_DOMAIN_TO_KEY], unknown> = {
   notif_sms_otp: {
@@ -90,6 +117,11 @@ const NOTIF_LINK_DEFAULTS: Record<(typeof NOTIF_LINK_DOMAIN_TO_KEY)[keyof typeof
     subject: "Compte active avec succes",
     bodyHtml: "<h2>Activation confirmee</h2><p>Votre compte est actif.</p><p>Etape suivante: rechargez votre wallet avec au moins {{min_deposit_usd}} USD pour commencer.</p>",
   },
+  notif_email_transaction: {
+    subject: "Nouvelle transaction {{tx_type}} - {{tx_status}}",
+    bodyHtml: "<p>Une nouvelle operation a ete enregistree sur votre compte.</p><p><strong>Type:</strong> {{tx_type}}<br><strong>Statut:</strong> {{tx_status}}<br><strong>Montant:</strong> {{amount}} {{currency}} ({{amount_usd}} USD)<br><strong>Reference:</strong> {{reference_id}}</p>",
+    actionLabel: "Voir mon historique",
+  },
   notif_referral_link: {
     baseUrl: "https://ecrossflow.com",
     registerPath: "/auth/register",
@@ -102,6 +134,38 @@ const NOTIF_LINK_DEFAULTS: Record<(typeof NOTIF_LINK_DOMAIN_TO_KEY)[keyof typeof
 
 const PLATFORM_RESET_PIN_KEY = "platform_reset_pin_hash";
 const NOTIF_LINK_SETTING_KEYS = Object.values(NOTIF_LINK_DOMAIN_TO_KEY);
+const LANDING_CONTENT_DEFAULT: Record<string, string> = {
+  secFaqTitle: "Questions fréquentes",
+  q1: "Combien puis-je gagner avec Ecrossflow ?",
+  a1: "Tes gains dépendent de ton activité et de ta progression. Plus tu avances dans les niveaux (de F à S), plus les gains deviennent importants et exponentiels.",
+  q2: "Est-ce que je dois inviter des personnes pour gagner ?",
+  a2: "Oui. Tu commences à gagner dès ton premier filleul actif. Pour accéder au board suivant après l'étape ranker, un minimum de 2 filleuls actifs est requis.",
+  q3: "Le système fonctionne-t-il même si je ne fais rien ?",
+  a3: "Oui. Une fois actif, tu peux continuer à progresser grâce au flux du réseau. Mais plus tu es actif, plus tu gagnes rapidement.",
+  q4: "Comment fonctionne la progression ?",
+  a4: "Tu passes à travers 7 niveaux (F à S). Chaque niveau contient : Starter → Challenger → Leader → Ranker. Chaque étape franchie débloque des gains.",
+  q5: "Pourquoi seulement $2 pour commencer ?",
+  a5: "C’est pour rendre l’accès simple et ouvert à tous. Avec ce montant, tu accèdes au système, aux opportunités et aux formations.",
+  q6: "Est-ce que je reçois quelque chose en plus des gains ?",
+  a6: "Oui. Tu peux accéder à des formations utiles pour apprendre et évoluer en même temps.",
+  q7: "Est-ce que mon compte et mes gains sont sécurisés ?",
+  a7: "Oui. La plateforme est conçue avec un système sécurisé et un suivi clair de ton évolution.",
+  q8: "Est-ce que tout le monde peut rejoindre ?",
+  a8: "Oui. Ecrossflow est ouvert à toute personne prête à commencer et à évoluer.",
+  finalTitle: "Tu attends quoi ?",
+  finalDesc: "Le meilleur moment pour commencer c’est maintenant.",
+  finalLine1: "Rejoins Ecrossflow",
+  finalLine2: "Connecte-toi",
+  finalLine3: "Commence à construire ton flow",
+  finalCta: "Créer mon compte",
+};
+const ACADEMY_CONTENT_DEFAULT: Record<string, string> = {
+  badge: "Academie Ecrossflow",
+  title: "Programme en cours de preparation",
+  subtitle: "L'academie integree arrive bientot avec des parcours complets pour accelerer votre progression.",
+  ctaLabel: "Bientot disponible",
+  heroHint: "Reste connecte pour l'ouverture officielle",
+};
 const PLATFORM_RESET_TABLES = [
   "board_participants",
   "board_instances",
@@ -176,6 +240,16 @@ async function ensureEvolutionInfra(): Promise<void> {
         ON CONFLICT (key) DO NOTHING;
       `);
     }
+    await db.execute(sql`
+      INSERT INTO system_settings (key, value)
+      VALUES (${LANDING_CONTENT_KEY}, ${JSON.stringify(LANDING_CONTENT_DEFAULT)}::jsonb)
+      ON CONFLICT (key) DO NOTHING;
+    `);
+    await db.execute(sql`
+      INSERT INTO system_settings (key, value)
+      VALUES (${ACADEMY_CONTENT_KEY}, ${JSON.stringify(ACADEMY_CONTENT_DEFAULT)}::jsonb)
+      ON CONFLICT (key) DO NOTHING;
+    `);
     evolutionInfraReady = true;
   })();
   try {
@@ -195,6 +269,15 @@ function parseDestination(metadata: unknown, description: string | null): string
     if (m?.[1]) return m[1].trim();
   }
   return "";
+}
+
+function parseCryptoAsset(metadata: unknown): { symbol: string; network: string } | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const raw = String((metadata as Record<string, unknown>).cryptoAsset || "").trim().toUpperCase();
+  if (!raw) return null;
+  const [symbol, network] = raw.split("_");
+  if (!symbol || !network) return null;
+  return { symbol, network };
 }
 
 function computeStrategicTree(n1: number) {
@@ -592,6 +675,60 @@ router.put("/admin/evolution/config/:key", requireAdmin as never, async (req: Au
   res.json({ message: "Config updated", key, value });
 });
 
+router.get("/admin/payment-config", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const raw = await getSystemSetting<unknown>("payment_runtime_config", PAYMENT_RUNTIME_DEFAULTS);
+  const config = normalizePaymentRuntimeConfig(raw);
+  res.json({
+    config,
+    depositMethods: paymentEnabledDepositMethods(config),
+    withdrawMethods: paymentEnabledWithdrawMethods(config),
+  });
+});
+
+router.put("/admin/payment-config", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const actor = req.userId || null;
+  const normalized = normalizePaymentRuntimeConfig(req.body?.config ?? req.body ?? {});
+  const depositMethods = paymentEnabledDepositMethods(normalized);
+  const withdrawMethods = paymentEnabledWithdrawMethods(normalized);
+
+  const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = 'payment_runtime_config' LIMIT 1`);
+  const oldConfig = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES ('payment_runtime_config', ${JSON.stringify(normalized)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();
+  `);
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES ('deposit_methods_enabled', ${JSON.stringify(depositMethods)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();
+  `);
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES ('withdraw_methods_enabled', ${JSON.stringify(withdrawMethods)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now();
+  `);
+
+  await db.execute(sql`
+    INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+    VALUES ('payment_runtime_config', ${JSON.stringify(oldConfig)}::jsonb, ${JSON.stringify(normalized)}::jsonb, ${actor});
+  `);
+  invalidateSystemConfigCache();
+
+  res.json({
+    message: "Payment config updated",
+    config: normalized,
+    depositMethods,
+    withdrawMethods,
+  });
+});
+
 router.get("/admin/evolution/audit", requireAdmin as never, async (req: AuthRequest, res) => {
   await ensureEvolutionInfra();
   const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || "50"), 10) || 50));
@@ -827,12 +964,19 @@ router.put("/admin/notif-link/config/:domain", requireAdmin as never, async (req
       return;
     }
   }
-  if (settingKey === "notif_email_otp" || settingKey === "notif_email_verification" || settingKey === "notif_email_notification") {
+  if (settingKey === "notif_email_otp" || settingKey === "notif_email_verification" || settingKey === "notif_email_notification" || settingKey === "notif_email_transaction") {
     const subject = String(cfg.subject || "").trim();
     const bodyHtml = String(cfg.bodyHtml || "").trim();
     if (!subject || !bodyHtml) {
       res.status(400).json({ error: "Bad Request", message: "subject and bodyHtml are required" });
       return;
+    }
+    if (settingKey === "notif_email_transaction") {
+      const actionLabel = String(cfg.actionLabel || "").trim();
+      if (!actionLabel) {
+        res.status(400).json({ error: "Bad Request", message: "actionLabel is required for transaction email template" });
+        return;
+      }
     }
   }
   if (settingKey === "notif_referral_link") {
@@ -889,6 +1033,111 @@ router.post("/admin/notif-link/defaults", requireAdmin as never, async (req: Aut
   }
   invalidateSystemConfigCache();
   res.json({ message: "Exemplary default values applied", domains: Object.keys(NOTIF_LINK_DOMAIN_TO_KEY) });
+});
+
+router.get("/admin/landing-content", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const value = await getSystemSetting<Record<string, unknown>>(LANDING_CONTENT_KEY, LANDING_CONTENT_DEFAULT);
+  res.json({
+    key: LANDING_CONTENT_KEY,
+    value: value && typeof value === "object" ? value : LANDING_CONTENT_DEFAULT,
+  });
+});
+
+router.put("/admin/landing-content", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const incoming = (req.body?.value && typeof req.body.value === "object")
+    ? req.body.value as Record<string, unknown>
+    : (req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : null);
+  if (!incoming) {
+    res.status(400).json({ error: "Bad Request", message: "value object is required" });
+    return;
+  }
+
+  const current = await getSystemSetting<Record<string, unknown>>(LANDING_CONTENT_KEY, LANDING_CONTENT_DEFAULT);
+  const next: Record<string, string> = {};
+  for (const key of Object.keys(LANDING_CONTENT_DEFAULT)) {
+    const fromIncoming = incoming[key];
+    const fromCurrent = (current as Record<string, unknown>)[key];
+    const value = typeof fromIncoming === "string"
+      ? fromIncoming.trim()
+      : typeof fromCurrent === "string"
+      ? fromCurrent
+      : LANDING_CONTENT_DEFAULT[key];
+    next[key] = value || LANDING_CONTENT_DEFAULT[key];
+  }
+
+  const extraKeys = Object.keys(incoming).filter((k) => !LANDING_CONTENT_ALLOWED_KEYS.has(k));
+  if (extraKeys.length) {
+    res.status(400).json({ error: "Bad Request", message: `Unsupported landing content keys: ${extraKeys.join(", ")}` });
+    return;
+  }
+
+  const actor = req.userId || null;
+  const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = ${LANDING_CONTENT_KEY} LIMIT 1`);
+  const oldValue = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES (${LANDING_CONTENT_KEY}, ${JSON.stringify(next)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+  `);
+  await db.execute(sql`
+    INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+    VALUES (${LANDING_CONTENT_KEY}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(next)}::jsonb, ${actor})
+  `);
+  invalidateSystemConfigCache();
+  res.json({ message: "Landing content updated", value: next });
+});
+
+router.get("/admin/academy-content", requireAdmin as never, async (_req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const value = await getSystemSetting<Record<string, unknown>>(ACADEMY_CONTENT_KEY, ACADEMY_CONTENT_DEFAULT);
+  res.json({
+    key: ACADEMY_CONTENT_KEY,
+    value: value && typeof value === "object" ? value : ACADEMY_CONTENT_DEFAULT,
+  });
+});
+
+router.put("/admin/academy-content", requireAdmin as never, async (req: AuthRequest, res) => {
+  await ensureEvolutionInfra();
+  const incoming = (req.body?.value && typeof req.body.value === "object")
+    ? req.body.value as Record<string, unknown>
+    : (req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : null);
+  if (!incoming) {
+    res.status(400).json({ error: "Bad Request", message: "value object is required" });
+    return;
+  }
+  const current = await getSystemSetting<Record<string, unknown>>(ACADEMY_CONTENT_KEY, ACADEMY_CONTENT_DEFAULT);
+  const next: Record<string, string> = {};
+  for (const key of Object.keys(ACADEMY_CONTENT_DEFAULT)) {
+    const fromIncoming = incoming[key];
+    const fromCurrent = (current as Record<string, unknown>)[key];
+    const value = typeof fromIncoming === "string"
+      ? fromIncoming.trim()
+      : typeof fromCurrent === "string"
+      ? fromCurrent
+      : ACADEMY_CONTENT_DEFAULT[key];
+    next[key] = value || ACADEMY_CONTENT_DEFAULT[key];
+  }
+
+  const actor = req.userId || null;
+  const oldRows = await db.execute(sql`SELECT value FROM system_settings WHERE key = ${ACADEMY_CONTENT_KEY} LIMIT 1`);
+  const oldValue = ((oldRows as unknown as { rows?: Array<{ value: unknown }> }).rows || [])[0]?.value ?? null;
+
+  await db.execute(sql`
+    INSERT INTO system_settings (key, value, updated_by, updated_at)
+    VALUES (${ACADEMY_CONTENT_KEY}, ${JSON.stringify(next)}::jsonb, ${actor}, now())
+    ON CONFLICT (key)
+    DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()
+  `);
+  await db.execute(sql`
+    INSERT INTO system_settings_audit (key, old_value, new_value, changed_by)
+    VALUES (${ACADEMY_CONTENT_KEY}, ${JSON.stringify(oldValue)}::jsonb, ${JSON.stringify(next)}::jsonb, ${actor})
+  `);
+  invalidateSystemConfigCache();
+  res.json({ message: "Academy content updated", value: next });
 });
 
 router.post("/admin/platform-reset/pin", requireAdmin as never, async (req: AuthRequest, res) => {
@@ -1946,6 +2195,8 @@ router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: Auth
     currency: transactionsTable.currency,
     paymentMethod: transactionsTable.paymentMethod,
     destination: transactionsTable.description,
+    metadata: transactionsTable.metadata,
+    referenceId: transactionsTable.referenceId,
     createdAt: transactionsTable.createdAt,
     username: usersTable.username,
   })
@@ -1954,17 +2205,34 @@ router.get("/admin/withdrawals/pending", requireAdmin as never, async (req: Auth
   .where(and(eq(transactionsTable.type, "WITHDRAWAL"), eq(transactionsTable.status, "PENDING")))
   .orderBy(desc(transactionsTable.createdAt));
 
-  const withdrawals = pending.map(w => ({
-    id: w.id,
-    userId: w.userId,
-    username: w.username,
-    amount: parseFloat(w.amount),
-    currency: w.currency,
-    paymentMethod: w.paymentMethod || "UNKNOWN",
-    destination: w.destination,
-    createdAt: w.createdAt,
-    overdue: w.createdAt < ago24h,
-  }));
+  const withdrawals = pending.map((w) => {
+    const metadata = (w.metadata && typeof w.metadata === "object")
+      ? w.metadata as Record<string, unknown>
+      : null;
+    const crypto = parseCryptoAsset(w.metadata);
+
+    return {
+      ...(metadata ? {
+        recipientName: String(metadata.recipientName || "").trim() || null,
+        recipientPhone: String(metadata.recipientPhone || "").trim() || null,
+        destinationAddress: String(metadata.destinationAddress || "").trim() || null,
+      } : {}),
+      ...(crypto ? {
+        cryptoSymbol: crypto.symbol,
+        cryptoNetwork: crypto.network,
+      } : {}),
+      id: w.id,
+      userId: w.userId,
+      username: w.username,
+      amount: parseFloat(w.amount),
+      currency: w.currency,
+      paymentMethod: w.paymentMethod || "UNKNOWN",
+      destination: parseDestination(w.metadata, w.destination),
+      reference: w.referenceId || null,
+      createdAt: w.createdAt,
+      overdue: w.createdAt < ago24h,
+    };
+  });
 
   res.json({
     withdrawals,

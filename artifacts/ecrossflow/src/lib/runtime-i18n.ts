@@ -1,4 +1,3 @@
-const CORE_LOCALES = new Set(["fr", "en", "es", "ht"]);
 const originalTexts = new Map<Text, string>();
 let observer: MutationObserver | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
@@ -98,7 +97,7 @@ export function stopRuntimeTranslation(): void {
 
 export async function startRuntimeTranslation(locale: string): Promise<void> {
   stopRuntimeTranslation();
-  if (CORE_LOCALES.has(locale)) return;
+  if (locale === "fr") return;
 
   await translateDom(locale);
 
@@ -110,4 +109,3 @@ export async function startRuntimeTranslation(locale: string): Promise<void> {
   });
   observer.observe(document.body, { childList: true, subtree: true, characterData: true });
 }
-

@@ -37,6 +37,12 @@ yarn-error.log
 testem.log
 /typings
 .env
+*.env
+client.txt
+circle-api.txt
+twillio.txt
+secrets-phone/
+private-secrets-*.txt
 
 # System Files
 .DS_Store
@@ -48,3 +54,4 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+artifacts/e2e-output/

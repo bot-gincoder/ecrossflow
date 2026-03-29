@@ -21,6 +21,7 @@ import {
   type LanguageOption,
 } from '@/lib/languages';
 import { buildLocalizedPath, persistLocale } from '@/lib/i18n';
+import { NeonGlobe } from '@/components/landing/neon-globe';
 
 type LandingCopy = {
   langLabel: string;
@@ -239,7 +240,7 @@ const COPY: Record<string, LandingCopy> = {
     q1: 'Combien puis-je gagner avec Ecrossflow ?',
     a1: 'Tes gains dépendent de ton activité et de ta progression. Plus tu avances dans les niveaux (de F à S), plus les gains deviennent importants et exponentiels.',
     q2: 'Est-ce que je dois inviter des personnes pour gagner ?',
-    a2: 'Oui, un minimum de 2 invitations est recommandé pour accélérer ta progression. Ensuite, tu peux continuer à inviter pour gagner plus vite, ou rester passif et profiter du réseau.',
+    a2: "Oui. Tu commences à gagner dès ton premier filleul actif. Pour accéder au board suivant après l'étape ranker, un minimum de 2 filleuls actifs est requis.",
     q3: '⚙️ Le système fonctionne-t-il même si je ne fais rien ?',
     a3: 'Oui. Une fois actif, tu peux continuer à progresser grâce au flux du réseau. Mais plus tu es actif, plus tu gagnes rapidement.',
     q4: 'Comment fonctionne la progression ?',
@@ -364,7 +365,7 @@ const COPY: Record<string, LandingCopy> = {
     q1: 'How much can I earn with Ecrossflow?',
     a1: 'Your gains depend on your activity and progression. The further you move through levels (F to S), the bigger and more exponential your gains become.',
     q2: 'Do I need to invite people to earn?',
-    a2: 'Yes, at least 2 invitations are recommended to speed up progression. Then you can keep inviting for faster gains or stay passive and benefit from the network.',
+    a2: 'Yes. You start earning from your first active referral. To access the next board after the ranker stage, at least 2 active referrals are required.',
     q3: '⚙️ Does the system work if I do nothing?',
     a3: 'Yes. Once active, you can continue progressing thanks to network flow. But the more active you are, the faster you earn.',
     q4: 'How does progression work?',
@@ -489,7 +490,7 @@ const COPY: Record<string, LandingCopy> = {
     q1: '¿Cuánto puedo ganar con Ecrossflow?',
     a1: 'Tus ganancias dependen de tu actividad y progreso. Cuanto más avanzas en los niveles (de F a S), más importantes y exponenciales son las ganancias.',
     q2: '¿Debo invitar personas para ganar?',
-    a2: 'Sí, se recomienda un mínimo de 2 invitaciones para acelerar tu progreso. Luego puedes seguir invitando para ganar más rápido o quedarte pasivo y aprovechar la red.',
+    a2: 'Sí. Empiezas a ganar desde tu primer referido activo. Para acceder al siguiente board después de la etapa ranker, se requieren al menos 2 referidos activos.',
     q3: '⚙️ ¿El sistema funciona aunque no haga nada?',
     a3: 'Sí. Una vez activo, puedes seguir progresando gracias al flujo de la red. Pero cuanto más activo seas, más rápido ganas.',
     q4: '¿Cómo funciona la progresión?',
@@ -614,7 +615,7 @@ const COPY: Record<string, LandingCopy> = {
     q1: 'Konbyen mwen ka touche ak Ecrossflow?',
     a1: 'Benefis ou depann de aktivite ou ak pwogrè ou. Plis ou avanse nan nivo yo (F rive S), plis benefis yo vin gwo epi eksponansyèl.',
     q2: 'Èske mwen dwe envite moun pou m touche?',
-    a2: 'Wi, omwen 2 envitasyon rekòmande pou akselere pwogrè ou. Apre sa, ou ka kontinye envite pou touche pi vit oswa rete pasif epi pwofite rezo a.',
+    a2: 'Wi. Ou kòmanse touche depi premye filèl aktif ou. Pou pase nan pwochen board apre etap ranker la, ou bezwen omwen 2 filèl aktif.',
     q3: '⚙️ Èske sistèm nan mache menm si mwen pa fè anyen?',
     a3: 'Wi. Yon fwa ou aktif, ou ka kontinye pwogrese gras ak koule rezo a. Men plis ou aktif, plis ou touche vit.',
     q4: 'Kijan pwogrè a mache?',
@@ -652,6 +653,19 @@ const CORE_LANGUAGES = new Set(['fr', 'en', 'es', 'ht']);
 function getCopy(language: string): LandingCopy {
   if (CORE_LANGUAGES.has(language)) return COPY[language] ?? COPY.en;
   return COPY.en;
+}
+
+function buildFrenchSourceFromOverrides(overrides: Record<string, unknown> | null | undefined): LandingCopy {
+  const source = { ...COPY.fr };
+  if (!overrides || typeof overrides !== "object") return source;
+  const keys = Object.keys(source) as Array<keyof LandingCopy>;
+  for (const key of keys) {
+    const value = overrides[key];
+    if (typeof value === "string" && value.trim()) {
+      source[key] = value;
+    }
+  }
+  return source;
 }
 
 export default function Landing() {
@@ -711,11 +725,6 @@ export default function Landing() {
     const cacheKey = `landing_copy_${language}`;
 
     const loadDynamicCopy = async () => {
-      if (CORE_LANGUAGES.has(language)) {
-        setDynamicCopy(null);
-        return;
-      }
-
       const cached = localStorage.getItem(cacheKey);
       if (cached) {
         try {
@@ -726,16 +735,37 @@ export default function Landing() {
         }
       }
 
-      const source = COPY.fr;
+      const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+      let source: LandingCopy = { ...COPY.fr };
+      try {
+        const contentRes = await fetch(`${base}/api/content/landing`);
+        if (contentRes.ok) {
+          const payload = await contentRes.json() as { value?: Record<string, unknown> };
+          source = buildFrenchSourceFromOverrides(payload?.value);
+        }
+      } catch {
+        source = { ...COPY.fr };
+      }
+
+      if (language === "fr") {
+        if (!active) return;
+        setDynamicCopy(source);
+        localStorage.setItem(cacheKey, JSON.stringify(source));
+        return;
+      }
+
       const keys = Object.keys(source) as Array<keyof LandingCopy>;
       const texts = keys.map((key) => source[key]);
-      const base = import.meta.env.BASE_URL.replace(/\/$/, '');
       const response = await fetch(`${base}/api/i18n/translate-runtime`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ locale: language, texts }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        if (!active) return;
+        setDynamicCopy(CORE_LANGUAGES.has(language) ? getCopy(language) : COPY.en);
+        return;
+      }
       const payload = await response.json() as { translations?: Record<string, string> };
       const translations = payload.translations || {};
       const merged = { ...source } as LandingCopy;
@@ -760,11 +790,13 @@ export default function Landing() {
         <div className="mx-auto w-full max-w-7xl px-4 py-2 sm:flex sm:h-20 sm:items-center sm:justify-between sm:px-6 sm:py-0">
           <div className="grid grid-cols-[1fr_auto] items-center gap-2 sm:flex sm:items-center sm:gap-3">
             <Link href="/" className="flex items-center gap-2.5 sm:gap-3">
-              <div className="h-9 w-9 rounded-xl border border-white/10 bg-white/5 p-1.5 sm:h-10 sm:w-10 sm:rounded-2xl sm:p-2">
+              <div className="h-10 w-10 rounded-xl border border-[#f4b847]/45 bg-[#110b03]/85 p-1.5 shadow-[0_0_18px_rgba(236,167,56,0.26)] sm:h-11 sm:w-11 sm:rounded-2xl sm:p-2">
                 <img
                   src={`${import.meta.env.BASE_URL}images/logo.png`}
                   alt="Ecrossflow"
-                  className="h-full w-full object-contain invert brightness-0"
+                  className="h-full w-full object-contain"
+                  loading="eager"
+                  fetchPriority="high"
                 />
               </div>
               <span className="font-display text-sm font-bold tracking-[0.08em] sm:text-lg">ECROSSFLOW</span>
@@ -875,8 +907,15 @@ export default function Landing() {
         <section className="relative overflow-hidden rounded-[28px] border border-white/12 bg-[linear-gradient(140deg,rgba(21,29,35,0.85),rgba(5,8,10,0.92))] p-4 sm:p-6 lg:p-8">
           <div className="pointer-events-none absolute -top-20 right-[-40px] h-56 w-56 rounded-full bg-[#23c6a4]/20 blur-3xl sm:h-72 sm:w-72" />
           <div className="pointer-events-none absolute -bottom-24 left-[-60px] h-56 w-56 rounded-full bg-[#3b82f6]/20 blur-3xl sm:h-72 sm:w-72" />
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute left-[56%] top-[52%] -translate-x-1/2 -translate-y-1/2 opacity-90">
+              <NeonGlobe />
+            </div>
+            <div className="absolute inset-0 bg-[radial-gradient(circle_at_52%_48%,rgba(35,198,164,0.16),rgba(0,0,0,0)_56%)]" />
+            <div className="absolute inset-0 bg-[linear-gradient(120deg,rgba(6,10,12,0.86)_0%,rgba(6,10,12,0.34)_50%,rgba(6,10,12,0.74)_100%)]" />
+          </div>
 
-          <div className="relative grid grid-cols-1 gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:gap-8">
+          <div className="relative z-10 grid grid-cols-1 gap-6 lg:grid-cols-[1.15fr_0.85fr] lg:gap-8">
             <div className="space-y-4 sm:space-y-5">
               <motion.span
                 initial={{ opacity: 0, y: 14 }}

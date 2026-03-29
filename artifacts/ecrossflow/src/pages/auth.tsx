@@ -478,8 +478,14 @@ export default function AuthPage() {
         />
         <div className="absolute inset-0 bg-gradient-to-r from-background/20 to-background" />
         <div className="relative z-10 max-w-md p-12">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-accent flex items-center justify-center mb-8 shadow-2xl box-glow">
-            <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="Logo" className="w-8 h-8 invert brightness-0" />
+          <div className="mb-8 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#f4b847]/45 bg-[#110b03]/90 p-1.5 shadow-[0_0_26px_rgba(236,167,56,0.32)]">
+            <img
+              src={`${import.meta.env.BASE_URL}images/logo.png`}
+              alt="Logo"
+              className="h-full w-full object-contain"
+              loading="eager"
+              fetchPriority="high"
+            />
           </div>
           <h2 className="text-4xl font-display font-bold mb-6 text-glow">
             Unlock the power of collective giving.
@@ -510,8 +516,14 @@ export default function AuthPage() {
       <div className="w-full lg:w-1/2 flex items-center justify-center p-6 sm:p-12 relative overflow-y-auto">
         <div className="w-full max-w-md py-6">
 
-          <div className="lg:hidden w-12 h-12 rounded-xl bg-gradient-to-br from-primary to-accent flex items-center justify-center mb-8 mx-auto">
-            <img src={`${import.meta.env.BASE_URL}images/logo.png`} alt="Logo" className="w-6 h-6 invert brightness-0" />
+          <div className="mx-auto mb-8 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#f4b847]/45 bg-[#110b03]/90 p-1.5 shadow-[0_0_20px_rgba(236,167,56,0.3)] lg:hidden">
+            <img
+              src={`${import.meta.env.BASE_URL}images/logo.png`}
+              alt="Logo"
+              className="h-full w-full object-contain"
+              loading="eager"
+              fetchPriority="high"
+            />
           </div>
 
           <div className="mb-8 text-center lg:text-left">

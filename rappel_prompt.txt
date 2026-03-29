@@ -1,16 +1,28 @@
-```
-Tu es un agent de développement chargé d'implémenter un système de progression par boards pour une plateforme de réseau. Voici les règles métier complètes que tu dois appliquer strictement.
+mise a jour À faire
 
-VISIBILITÉ : Toutes les données de progression, calculs de boards et distributions sont invisibles aux utilisateurs normaux. Seul l'administrateur accède au dashboard temps réel affichant la progression de chaque compte sur chaque board.
+ enleve le panel depot/retrait dans la page wallet utilise des boutons reliés a des pages externes a la place.
+dans la page externe depot ou recharge:
+la plateforme support 4 moyen de paiement
+1- Natcash (laisse manuel mais avec  transaction id verification & confirmation depuis admin, et aussi c'est une obligation d'upload un screenshort du recu en plus de l'id du paiement qu'on doit rensegner)
+2-Moncash (pour le moment ce sera pareil que le natcash)         NB: les infos des comptes natcash/moncash(numero, nom, montant) doit etre personalisable en admin
+3- paiment crypto(manuel, j'ajouterai des adresse de quelque crypto de mon wallet, mais le client doit toujour upload une capture) les crypto/reaseau supporté doivent personalisable dans admin
+4- paiement par carte (on utilisera un lien de paiement gateway stripe pour ca), ce lien doit etre ajoutable ou modifiable dans admin.
 
-STRUCTURE ARBORESCENTE BINAIRE : Le système repose sur un arbre binaire. Chaque nœud génère exactement 2 enfants directs avant de progresser au board supérieur. La formule de position est la suivante — N1 est le nœud racine du board. N2 = N1*2 (enfant gauche de N1). N3 = N1*2+1 (enfant droit de N1). N4 = N3*2 (enfant gauche de N3). N5 = N3*2+1 (enfant droit de N3). N6 = N2*2+1 (enfant droit de N2). N7 = N2*2 (enfant gauche de N2). Les enfants de N4 sont N4*2 et N4*2+1. Les enfants de N5 sont N5*2 et N5*2+1. Les enfants de N6 sont N6*2+1 et N6*2. Les enfants de N7 sont N7*2+1 et N7*2. Les rôles des positions sont les suivants : Ranger Starter est le nouveau participant qui vient de payer et entre dans le board. Ranger Ranker est le nœud N1, position centrale active en cours de complétion. Ranger Leader est la progression vers le board supérieur côté gauche. Ranger Challenge est la progression vers le board supérieur côté droit.
 
-RÈGLE DE PROGRESSION FONDAMENTALE : Un nœud N1 progresse au board supérieur uniquement lorsqu'il a 2 enfants directs confirmés (N2 et N3). Le paiement des Starters est la seule source de financement du système. Quand on dit prix x8, cela signifie que le gain d'un Ranker (N1) est équivalent au paiement cumulé de 8 Starters de ce board. Ce total est ensuite divisé en deux : une moitié monte au board suivant, l'autre couvre les frais système et le wallet retirable. Un utilisateur ne peut pas progresser au board suivant sans avoir invité au minimum 2 personnes valides via son lien de parrainage. Sans ces 2 invitations, le compte est bloqué au board actuel.
 
-DISTRIBUTION PAR BOARD : Board F, prix Starter 2$. Calcul : 2x8 = 16$. Déduction vers Board E : -10$. Frais système : -2$. Ajout wallet retirable : +4$. Bonus parrainage direct : +0.50$ par filleul valide. Board E, prix Starter 10$. Calcul : 10x8 = 80$. Déduction vers Board D : -50$. Frais système : -10$. Ajout wallet retirable : +20$. Bonus parrainage direct : +0.25$ par filleul valide. Board D, prix Starter 50$. Calcul : 50x8 = 400$. Déduction vers Board C : -200$. Frais système : -50$. Ajout wallet retirable : +150$. Bonus parrainage identique au Board E. Board C, prix Starter 200$. Calcul : 200x8 = 1600$. Déduction vers Board B : -800$. Frais système : -200$. Ajout wallet retirable : +600$. Bonus parrainage identique au Board D. Board B, prix Starter 800$. Calcul : 800x8 = 6400$. Déduction vers Board A : -3200$. Frais système : -800$. Ajout wallet retirable : +2400$. Bonus parrainage direct : +0.062$ par filleul valide. Board A, prix Starter 3200$. Calcul : 3200x8 = 25600$. Déduction vers Board S : -12800$. Frais système : -3200$. Ajout wallet retirable : +9600$. Bonus parrainage identique au Board B. Board S, prix Starter 12800$, board final. Calcul : 12800x8 = 102400$. Frais système : -51200$. Ajout wallet retirable : +50000$.
+Pour la page externe du retrait public du plateforme on supporte pour le moment 3 methodes
+1-Moncash(avec un champ numero, montant, nom)
+2-Natcash(avec un champ numero, montant, nom)
+3- crypto(avec un panel admin pour gerer crypto/reseaux supportés)
 
-SYSTÈME DE PARRAINAGE UNIVERSEL APPLIQUÉ À TOUS LES BOARDS : Quand le Parrain invite Filleul1, le Parrain gagne le bonus plein du board concerné. Quand Filleul1 invite Filleul2, le Parrain gagne 50% du bonus qu'il aurait gagné en invitant directement. Quand Filleul2 invite Filleul3, le Parrain ne gagne plus rien. C'est Filleul1 qui gagne le bonus plein et Filleul2 qui gagne 50%. La règle de division par 2 se décale à chaque génération. Un parrain ne perçoit des bonus que jusqu'à la 2ème génération de sa lignée directe uniquement. Cette règle s'applique de manière identique sur tous les boards.
+Chacun des ces methode de paiement doit avoir un toggle d'activation dans l'admin, si desactivé la methode est strictement caché Dans la page admin.
 
-CONDITIONS BLOQUANTES : L'utilisateur doit payer le prix du board pour activer son compte. L'utilisateur doit inviter minimum 2 filleuls directs valides pour progresser au board suivant. Sans ces 2 invitations, le compte reste bloqué au board actuel indéfiniment. La progression et toutes les distributions sont déclenchées automatiquement dès que les conditions sont remplies. Ces règles sont non négociables et doivent être appliquées dans chaque composant, chaque fonction, chaque logique backend et frontend du système.
-```
-noublie pas de toujours rend modifiable dans admin
+dans le panel admin comme indiquer plus haut creer une nouvelle page pour gerer tous ca, tous ceux en rapport au paiement. Dans cette page de gestion. Ajoute aussi des champs pour gerer le temp de traitement du depo pour chaque methodes de paiement, ainsi que pour les retrait aussi(J:H:M:S) pour chaque methode specifique .
+
+
+Pour la partie admin qui gere la confirmation de retrait ce sera manuel, mais creer un system automatisé , optimisé pour facilité l'admin a 1èrement transfert l'argent demandé via la methode demandé ensuite pour aprouver le retrait
+
+
+La verification KYC n'est plus necessaire car tout est manuel pour le moment dans la partie retrait enleve la
+.
+Je veux des pages depot, retrait moderne avec design ui ux de ouf

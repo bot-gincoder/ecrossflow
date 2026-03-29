@@ -6,6 +6,7 @@ import type { GetNotificationsFilter, Notification } from '@workspace/api-client
 import { AppLayout } from '@/components/layout';
 import { useQueryClient } from '@tanstack/react-query';
 import { useLocation } from 'wouter';
+import { useAppStore } from '@/hooks/use-store';
 
 const CATEGORY_ICONS: Record<string, LucideIcon> = {
   financial: DollarSign,
@@ -20,6 +21,7 @@ type FilterOption = GetNotificationsFilter | 'all';
 const PAGE_SIZE = 20;
 
 export default function NotificationsPage() {
+  const { t } = useAppStore();
   const [filter, setFilter] = useState<FilterOption>('all');
   const [page, setPage] = useState(1);
   const [allNotifications, setAllNotifications] = useState<Notification[]>([]);
@@ -104,9 +106,9 @@ export default function NotificationsPage() {
       <div className="space-y-6">
         <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-display font-bold">Notifications</h1>
+            <h1 className="text-3xl font-display font-bold">{t('notifications.title')}</h1>
             <p className="text-muted-foreground mt-1">
-              {data?.unreadCount ?? unreadCount} non lue{(data?.unreadCount ?? unreadCount) > 1 ? 's' : ''}
+              {data?.unreadCount ?? unreadCount} {t('notifications.unread_count')}
             </p>
           </div>
           {(data?.unreadCount ?? unreadCount) > 0 && (
@@ -114,7 +116,7 @@ export default function NotificationsPage() {
               onClick={() => markAllRead()}
               className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-primary transition-colors"
             >
-              <CheckCheck className="w-4 h-4" /> Tout marquer lu
+              <CheckCheck className="w-4 h-4" /> {t('notifications.mark_all')}
             </button>
           )}
         </motion.div>
@@ -127,7 +129,7 @@ export default function NotificationsPage() {
               onClick={() => setFilter(f)}
               className={`px-4 py-2 rounded-xl text-sm capitalize font-medium transition-all ${filter === f ? 'bg-primary text-primary-foreground' : 'bg-card border border-border hover:bg-muted'}`}
             >
-              {f === 'all' ? 'Toutes' : f === 'unread' ? 'Non lues' : f === 'financial' ? 'Finance' : 'Sécurité'}
+              {f === 'all' ? t('notifications.all') : f === 'unread' ? t('notifications.unread') : f === 'financial' ? t('notifications.financial') : t('notifications.security')}
             </button>
           ))}
         </div>
@@ -137,7 +139,7 @@ export default function NotificationsPage() {
           {allNotifications.length === 0 && !isFetching && (
             <div className="text-center py-16 text-muted-foreground">
               <Bell className="w-12 h-12 mx-auto mb-3 opacity-30" />
-              <p>Aucune notification</p>
+              <p>{t('notifications.none')}</p>
             </div>
           )}
           {allNotifications.map((n: Notification, idx: number) => {
@@ -178,7 +180,7 @@ export default function NotificationsPage() {
               </div>
             )}
             {!hasMore && allNotifications.length > 0 && (
-              <p className="text-xs text-muted-foreground/50">Toutes les notifications chargées</p>
+              <p className="text-xs text-muted-foreground/50">{t('notifications.loaded_all')}</p>
             )}
           </div>
         </div>

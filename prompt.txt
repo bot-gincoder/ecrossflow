@@ -1,60 +1,28 @@
- pourquoi il n'y a pas de mouvement alors que j'ai ajouté plusieur compte valide, mais ceo ne fais aucun pas c'est pas bon du tout le systeme doit detecté chaque compte qui vient de s'aciver et les assigne
-    automatiquement le prochain numero vide, ensuite il doit calculer par rapport au numero deja present sur le board et l'assigner une position temporaire en attendant les deux compte qui le suit s'active et
-  recoivent leur numero pour qu'il pas au etapes suivante ainsi de suite, petite note que tu n'as pas prix en contre si ceo a le numero 1 alora ils doit etre placé actuelement dans l'etape ranker F, justequ'a
-  l'arrivé de deux leader pour qu'il passe au board E, afin que le board soit diviser pour que les deux leaders deviennent ranker F a leur tour et chacun dans leur board separé, et aussi j'ai remarqué que le ledger interne fonctionne parfaiteement alors enleve les plateforme de bourse digital externe, je veux aussi que le systeme
-  des board se repose entierement sur ce ledger, et aussi a la place des methode paiement integre des payment gateway microtransaction, ex stripe, moncash/Natcash(meme si c'est manuel, mais avec un systeme qui m'aide a verifié si les paie qu'on me notifie sont vraiment debiter ) et crypto aussi et tous ces valeurs
-  doivent etre entierment personaliseable dans le paneL admin
+mise a jour À faire.
+
+ enleve le panel depot/retrait dans la page wallet utilise des boutons reliés a des pages externes a la place.
+dans la page externe depot ou recharge:
+la plateforme support 4 moyen de paiement
+1- Natcash (laisse manuel mais avec  transaction id verification & confirmation depuis admin, et aussi c'est une obligation d'upload un screenshort du recu en plus de l'id du paiement qu'on doit rensegner)
+2-Moncash (pour le moment ce sera pareil que le natcash)         NB: les infos des comptes natcash/moncash(numero, nom, montant) doit etre personalisable en admin
+3- paiment crypto(manuel, j'ajouterai des adresse de quelque crypto de mon wallet, mais le client doit toujour upload une capture) les crypto/reaseau supporté doivent personalisable dans admin
+4- paiement par carte (on utilisera un lien de paiement gateway stripe pour ca), ce lien doit etre ajoutable ou modifiable dans admin.
 
 
-je veux que tu passe des heure sur chaque details du projet petit ou gros, je veux qu'en meme temp tu lances des testes , des screershort pour voir chaque ce que tu as fais pour ajusté si necessaire et des screen video pour tester toi meme en tant que dev pro , pour bien deboguer le system et ne t'arrete que lorsque tout soit comme demandé
 
-pour qu'un compte, ou qu'un filleuille invité soit valide il doit faire un depot et payer le board F
+Pour la page externe du retrait public du plateforme on supporte pour le moment 3 methodes
+1-Moncash(avec un champ numero, montant, nom)
+2-Natcash(avec un champ numero, montant, nom)
+3- crypto(avec un panel admin pour gerer crypto/reseaux supportés)
 
-Voici comment chaque compte gravira les positions selons le systeme
+Chacun des ces methode de paiement doit avoir un toggle d'activation dans l'admin, si desactivé la methode est strictement caché Dans la page admin.
 
-C'est infos ne doit en aucun cas etre visible par un utilisateur normal, uniquement l'admin doit voir en temp reel comment chaque board divisera selon un system de progression.
+dans le panel admin comme indiquer plus haut creer une nouvelle page pour gerer tous ca, tous ceux en rapport au paiement. Dans cette page de gestion. Ajoute aussi des champs pour gerer le temp de traitement du depo pour chaque methodes de paiement, ainsi que pour les retrait aussi(J:H:M:S) pour chaque methode specifique .
 
-Board F, prix 2$
-2x8= $16
-$10 deduit pour le board E.
-$2 deduit automatiquement , pour fee board.
-$4 ajouter au wallet, retirable + referal bonus fileuil de $0.50 par invité valide directe.
-Si un utilisateur ex: parain-main invite une personne elle devient son filleuil directe et parain-main gagne $0.5
-à chaque fois qu'un filleuil(ex : filleuil1) invite a son tour un filleuil(ex :filleuil2)  parain-main , parain du fileuil1 gagne la moitié de la somme gagné quand il a invité filleuil2 jusqu'au deuxieme generation. Par exemple si filleuil2 invite filleuil3 alors parain-main ne gagne plus , c'est filleuil2 qui gagne $0.50 et filleuil 1 aussi qui gagne $0.25
 
-Si l'utilisateur active son compte en payant $2, et n'invite personne , il n'aura pas access au board suivante E. Donc il ne progressera plus que si et seulement s'il invite au minimum 2 personne avec son lien.
+Pour la partie admin qui gere la confirmation de retrait ce sera manuel, mais creer un system automatisé , optimisé pour facilité l'admin a 1èrement transfert l'argent demandé via la methode demandé ensuite pour aprouver le retrait
 
-Board E , prix $10 ,  le system fait $10 x 8 = 80.
-$50 deduit pour board D.
-$10 fee board
-$20 sont ajouter au wallet retirable + bonus referal.
-$0.25 par invité valide.+  Les memes process de mootier pour les generations de filleuile que le board 1.
 
-Board D. Prix $50. Le systeme fait 50x8 = $400
-$200 sont deduis pour le board suivant C.
-$50 pour fee board
-$150 ajouter au wallet retirable plus bonus referals, les memes regles referal que le board E
+La verification KYC n'est plus necessaire car tout est manuel pour le moment dans la partie retrait enleve la
 .
-Board C. prix $200 , 200x8= $1600.
-$800 sont deduit pour le board B.
-$200 fee board.
-$600 ajouter au wallet + bonus referal , le meme que board D.
-
-Board B, prix $800. 800x8 = $6400.
-$3200 sont deduit pour le board A,
-$800 fee board.
-$2400 sont ajouter au wallet+ bonus referal avec $0,062 par tete. + le meme principe de division de generation des precedentes board.
- 
-Board A prix $3200. 3200x8 = $25600.
-$12800 sont deduit le boards S.
-$3200 pour fee board.
-$9600 sont ajouter au wallet plus les meme principe de bonus referal le board precedent.
-
-Board S, prix 12800. 12800x8,
-$102 400
-
-51200 sont deduit comme frais systemes
-50 000 sont retirable sur le wallet
-
-tu vois combient coute chaque board et combient ils donne apres a chaque rang ranker d'un niveau et les bonus aussi modifie la partie public, des boards pour affiché ces prix , ne dite rien dans la partie public a propos des fee system juste dis leur tant prix d'entré , tant pour le board suivant, et tant pour le sorti en arrivant ranker tres brefs, l'achitecture de ce systeme doit etre resté secrete
-
+Je veux des pages depot, retrait moderne avec design ui ux de ouf

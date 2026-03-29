@@ -5,7 +5,7 @@ import {
   Users, DollarSign, Activity, CheckCircle, XCircle, Loader2, Search,
   BarChart3, ShieldAlert, LucideIcon, ArrowDownLeft, ArrowUpRight, Layers,
   TrendingUp, FileText, Download, Clock, RefreshCw, Wallet, AlertTriangle, Eye
-  , Trash2, CheckSquare, Square
+  , Trash2, CheckSquare, Square, Copy
 } from 'lucide-react';
 import {
   useGetAdminStats, useGetAdminUsers, useGetPendingDeposits, useApproveDeposit,
@@ -274,8 +274,21 @@ export default function AdminPage() {
   const [platformResetPinBusy, setPlatformResetPinBusy] = useState(false);
   const [platformResetBusy, setPlatformResetBusy] = useState(false);
   const [platformResetMessage, setPlatformResetMessage] = useState('');
+  const [withdrawTransferReady, setWithdrawTransferReady] = useState<Record<string, boolean>>({});
+  const [copiedKey, setCopiedKey] = useState('');
   const queryClient = useQueryClient();
   const { token } = useAppStore();
+
+  const copyText = async (value: string, key: string) => {
+    if (!value) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      window.setTimeout(() => setCopiedKey(''), 1200);
+    } catch {
+      setCopiedKey('');
+    }
+  };
 
   useEffect(() => {
     const newTab: AdminTab = tabParam && validTabs.includes(tabParam) ? tabParam : 'overview';
@@ -1090,7 +1103,28 @@ export default function AdminPage() {
                         </span>
                       )}
                     </div>
-                    <p className="text-sm text-muted-foreground">{d.paymentMethod} · Ref: {d.reference || 'N/A'}</p>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span>{d.paymentMethod}</span>
+                      <span>· Ref: {d.reference || 'N/A'}</span>
+                      {d.reference ? (
+                        <button
+                          type="button"
+                          onClick={() => copyText(String(d.reference), `dep-ref:${d.id}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] hover:border-primary/50"
+                        >
+                          <Copy className="w-3 h-3" />
+                          {copiedKey === `dep-ref:${d.id}` ? 'Copié' : 'Copier ref'}
+                        </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => copyText(String(d.id), `dep-id:${d.id}`)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] hover:border-primary/50"
+                      >
+                        <Copy className="w-3 h-3" />
+                        {copiedKey === `dep-id:${d.id}` ? 'Copié' : 'Copier id'}
+                      </button>
+                    </div>
                   </div>
                   <div className="text-right">
                     <p className="text-xl font-display font-bold text-primary">{d.amount} {d.currency}</p>
@@ -1156,7 +1190,17 @@ export default function AdminPage() {
                 <p>Aucun retrait en attente</p>
               </div>
             )}
-            {withdrawalsData?.withdrawals?.map((w: AdminWithdrawal, idx: number) => (
+            {withdrawalsData?.withdrawals?.map((w: AdminWithdrawal, idx: number) => {
+              const row = w as AdminWithdrawal & {
+                recipientName?: string | null;
+                recipientPhone?: string | null;
+                destinationAddress?: string | null;
+                cryptoSymbol?: string | null;
+                cryptoNetwork?: string | null;
+                reference?: string | null;
+              };
+              const copyTarget = row.destinationAddress || row.recipientPhone || row.destination || '';
+              return (
               <motion.div
                 key={w.id}
                 initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.05 }}
@@ -1173,9 +1217,35 @@ export default function AdminPage() {
                       )}
                     </div>
                     <p className="text-sm text-muted-foreground">{w.paymentMethod}</p>
-                    {w.destination && (
-                      <p className="text-xs text-muted-foreground mt-0.5">Destination: {w.destination}</p>
-                    )}
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      {row.reference ? <span>Ref: {row.reference}</span> : null}
+                      {row.reference ? (
+                        <button
+                          type="button"
+                          onClick={() => copyText(String(row.reference || ''), `wdr-ref:${w.id}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] hover:border-primary/50"
+                        >
+                          <Copy className="w-3 h-3" />
+                          {copiedKey === `wdr-ref:${w.id}` ? 'Copié' : 'Copier ref'}
+                        </button>
+                      ) : null}
+                    </div>
+                    {row.cryptoSymbol && row.cryptoNetwork ? (
+                      <p className="text-xs text-muted-foreground mt-1">Crypto: {row.cryptoSymbol} · Réseau: {row.cryptoNetwork}</p>
+                    ) : null}
+                    {copyTarget ? (
+                      <div className="mt-1 flex items-center gap-2">
+                        <p className="text-xs text-muted-foreground">Destination: <span className="font-mono text-foreground/90">{copyTarget}</span></p>
+                        <button
+                          type="button"
+                          onClick={() => copyText(String(copyTarget), `wdr-dest:${w.id}`)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground hover:text-foreground hover:border-primary/50"
+                        >
+                          <Copy className="w-3 h-3" />
+                          {copiedKey === `wdr-dest:${w.id}` ? 'Copié' : 'Copier'}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                   <div className="text-right">
                     <p className="text-xl font-display font-bold text-red-400">{w.amount} {w.currency}</p>
@@ -1206,8 +1276,19 @@ export default function AdminPage() {
                 ) : (
                   <div className="flex gap-2 mt-3">
                     <button
+                      onClick={() => setWithdrawTransferReady((prev) => ({ ...prev, [w.id]: true }))}
+                      className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium border transition-all ${
+                        withdrawTransferReady[w.id]
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/30'
+                          : 'bg-background text-muted-foreground border-border hover:text-foreground'
+                      }`}
+                    >
+                      <CheckCircle className="w-4 h-4" /> {withdrawTransferReady[w.id] ? 'Transfert marqué' : 'Marquer transféré'}
+                    </button>
+                    <button
                       onClick={() => approveW({ id: w.id })}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:shadow-[0_0_15px_rgba(0,255,170,0.3)] transition-all"
+                      disabled={!withdrawTransferReady[w.id]}
+                      className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:shadow-[0_0_15px_rgba(0,255,170,0.3)] transition-all disabled:opacity-40 disabled:hover:shadow-none"
                     >
                       <CheckCircle className="w-4 h-4" /> Approuver
                     </button>
@@ -1220,7 +1301,7 @@ export default function AdminPage() {
                   </div>
                 )}
               </motion.div>
-            ))}
+            );})}
           </div>
         )}
 

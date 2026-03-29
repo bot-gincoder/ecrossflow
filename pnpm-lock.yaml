@@ -257,9 +257,18 @@ importers:
       canvas-confetti:
         specifier: ^1.9.4
         version: 1.9.4
+      d3-geo:
+        specifier: ^3.1.1
+        version: 3.1.1
       qrcode.react:
         specifier: ^4.2.0
         version: 4.2.0(react@19.1.0)
+      topojson-client:
+        specifier: ^3.1.0
+        version: 3.1.0
+      world-atlas:
+        specifier: ^2.0.2
+        version: 2.0.2
       zustand:
         specifier: ^5.0.12
         version: 5.0.12(@types/react@19.2.14)(react@19.1.0)(use-sync-external-store@1.6.0(react@19.1.0))
@@ -1952,6 +1961,9 @@ packages:
     resolution: {integrity: sha512-H+y0Jo/T1RZ9qPP4Eh1pkcQcLRglraJaSLoyOtHxu6AapkjWVCy2Sit1QQ4x3Dng8qDlSsZEet7g5Pq06MvTgw==}
     engines: {node: '>=20'}
 
+  commander@2.20.3:
+    resolution: {integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==}
+
   compare-versions@6.1.1:
     resolution: {integrity: sha512-4hm4VPpIecmlg59CHXnRDnqGplJFrbLG4aFEl5vl6cK1u76ws3LLvX7ikFnTDl5vo39sjWD6AaDPYodJp/NNHg==}
 
@@ -2011,6 +2023,10 @@ packages:
 
   d3-format@3.1.2:
     resolution: {integrity: sha512-AJDdYOdnyRDV5b6ArilzCPPwc1ejkHcoyFarqlPqT7zRYjhavcT3uSrqcMvsgh2CgoPbK3RCwyHaVyxYcP2Arg==}
+    engines: {node: '>=12'}
+
+  d3-geo@3.1.1:
+    resolution: {integrity: sha512-637ln3gXKXOwhalDzinUgY83KzNWZRKbYubaG+fGVuc/dxO64RRljtCTnf5ecMyE1RIdtqpkVcq0IbtU2S8j2Q==}
     engines: {node: '>=12'}
 
   d3-interpolate@3.0.1:
@@ -3250,6 +3266,10 @@ packages:
     resolution: {integrity: sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA==}
     engines: {node: '>=0.6'}
 
+  topojson-client@3.1.0:
+    resolution: {integrity: sha512-605uxS6bcYxGXw9qi62XyrV6Q3xwbndjachmNxu8HWTtVPxZfEJN9fd/SZS1Q54Sn2y0TMyMxFj/cJINqGHrKw==}
+    hasBin: true
+
   tsconfck@3.1.6:
     resolution: {integrity: sha512-ks6Vjr/jEw0P1gmOVwutM3B7fWxoWBL2KRDb1JfqGVawBmO5UsvmWOQFGHBPl5yxYz4eERr19E6L7NMv+Fej4w==}
     engines: {node: ^18 || >=20}
@@ -3416,6 +3436,9 @@ packages:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
     engines: {node: '>= 8'}
     hasBin: true
+
+  world-atlas@2.0.2:
+    resolution: {integrity: sha512-IXfV0qwlKXpckz1FhwXVwKRjiIhOnWttOskm5CtxMsjgE/MXAYRHWJqgXOpM8IkcPBoXnyTU5lFHcYa5ChG0LQ==}
 
   wouter@3.9.0:
     resolution: {integrity: sha512-sF/od/PIgqEQBQcrN7a2x3MX6MQE6nW0ygCfy9hQuUkuB28wEZuu/6M5GyqkrrEu9M6jxdkgE12yDFsQMKos4Q==}
@@ -4886,6 +4909,8 @@ snapshots:
 
   commander@14.0.3: {}
 
+  commander@2.20.3: {}
+
   compare-versions@6.1.1: {}
 
   content-disposition@1.0.1: {}
@@ -4929,6 +4954,10 @@ snapshots:
   d3-ease@3.0.1: {}
 
   d3-format@3.1.2: {}
+
+  d3-geo@3.1.1:
+    dependencies:
+      d3-array: 3.2.4
 
   d3-interpolate@3.0.1:
     dependencies:
@@ -6071,6 +6100,10 @@ snapshots:
 
   toidentifier@1.0.1: {}
 
+  topojson-client@3.1.0:
+    dependencies:
+      commander: 2.20.3
+
   tsconfck@3.1.6(typescript@5.9.3):
     optionalDependencies:
       typescript: 5.9.3
@@ -6199,6 +6232,8 @@ snapshots:
   which@2.0.2:
     dependencies:
       isexe: 2.0.0
+
+  world-atlas@2.0.2: {}
 
   wouter@3.9.0(react@19.1.0):
     dependencies:

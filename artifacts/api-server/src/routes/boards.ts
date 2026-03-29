@@ -16,6 +16,7 @@ import {
   creditActivationReferralBonuses,
   evaluateBoardProgressions,
   fetchValidatedAccounts,
+  findStrategicPlacementForBoard,
 } from "../services/board-network.js";
 import { adjustAvailableWithTreasury, ensureLedgerInfra, ensureWalletAndLedgerAccounts } from "../lib/ledger.js";
 
@@ -141,11 +142,17 @@ router.get("/boards/my-status", requireAuth as never, async (req: AuthRequest, r
     }
 
     if (idx === currentIdx) {
+      const placement = meValidated
+        ? findStrategicPlacementForBoard(validatedUsers, me.id, board.id)
+        : null;
       return {
         boardId: board.id,
         completed: false,
-        role: hasNumber ? "RANKER" : "STARTER",
-        instanceId: `virtual-${board.id}-${me.accountNumber || "na"}`,
+        role: placement?.role || (hasNumber ? "RANKER" : "STARTER"),
+        position: placement?.position ?? null,
+        slot: placement?.slot ?? null,
+        strategicNumber: placement?.strategicNumber ?? null,
+        instanceId: `virtual-${board.id}-${placement?.rootNumber || me.accountNumber || "na"}`,
         amountPaid: meValidated ? parseMoney(board.entryFee) : null,
         joinedAt: null,
       };
@@ -185,9 +192,14 @@ router.get("/boards/:boardId/instance", requireAuth as never, async (req: AuthRe
   }
 
   const me = users[0];
-  const rootNumber = Number(me.accountNumber);
-  const numbers = computeStrategicLeafNumbers(rootNumber);
   const validatedUsers = await fetchValidatedAccounts();
+  const placement = findStrategicPlacementForBoard(validatedUsers, me.id, boardId);
+  if (!placement) {
+    res.status(404).json({ error: "Not Found", message: "No strategic placement found for this board" });
+    return;
+  }
+  const rootNumber = placement.rootNumber;
+  const numbers = computeStrategicLeafNumbers(rootNumber);
   const byNumber = new Map(validatedUsers.map((u) => [u.accountNumber, u]));
 
   const slotUsers = [
@@ -238,6 +250,10 @@ router.get("/boards/:boardId/instance", requireAuth as never, async (req: AuthRe
     id: `virtual-${boardId}-${rootNumber}`,
     boardId,
     instanceNumber: rootNumber,
+    myRole: placement.role,
+    myPosition: placement.position,
+    mySlot: placement.slot,
+    myStrategicNumber: placement.strategicNumber,
     ranker,
     status: "ACTIVE",
     slotsFilled: participants.filter((p) => p.role === "STARTER").length,

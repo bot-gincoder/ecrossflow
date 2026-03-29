@@ -1,5 +1,6 @@
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
+import { PAYMENT_RUNTIME_DEFAULTS } from "./payment-config.js";
 
 const DEFAULTS: Record<string, unknown> = {
   entry_fee_usd: 2,
@@ -48,6 +49,11 @@ const DEFAULTS: Record<string, unknown> = {
     subject: "Compte active avec succes",
     bodyHtml: "<h2>Activation confirmee</h2><p>Votre compte est actif.</p><p>Etape suivante: rechargez votre wallet avec au moins {{min_deposit_usd}} USD pour commencer.</p>",
   },
+  notif_email_transaction: {
+    subject: "Nouvelle transaction {{tx_type}} - {{tx_status}}",
+    bodyHtml: "<p>Une nouvelle operation a ete enregistree sur votre compte.</p><p><strong>Type:</strong> {{tx_type}}<br><strong>Statut:</strong> {{tx_status}}<br><strong>Montant:</strong> {{amount}} {{currency}} ({{amount_usd}} USD)<br><strong>Reference:</strong> {{reference_id}}</p>",
+    actionLabel: "Voir mon historique",
+  },
   notif_referral_link: {
     baseUrl: "https://ecrossflow.com",
     registerPath: "/auth/register",
@@ -56,6 +62,39 @@ const DEFAULTS: Record<string, unknown> = {
     telegramTemplate: "🚀 Rejoins {{app_name}} | Code: {{referral_code}} | Lien: {{referral_link}}",
     genericTemplate: "Rejoins {{app_name}} avec mon code {{referral_code}}: {{referral_link}}",
   },
+  landing_content_overrides: {
+    secFaqTitle: "Questions fréquentes",
+    q1: "Combien puis-je gagner avec Ecrossflow ?",
+    a1: "Tes gains dépendent de ton activité et de ta progression. Plus tu avances dans les niveaux (de F à S), plus les gains deviennent importants et exponentiels.",
+    q2: "Est-ce que je dois inviter des personnes pour gagner ?",
+    a2: "Oui. Tu commences à gagner dès ton premier filleul actif. Pour accéder au board suivant après l'étape ranker, un minimum de 2 filleuls actifs est requis.",
+    q3: "Le système fonctionne-t-il même si je ne fais rien ?",
+    a3: "Oui. Une fois actif, tu peux continuer à progresser grâce au flux du réseau. Mais plus tu es actif, plus tu gagnes rapidement.",
+    q4: "Comment fonctionne la progression ?",
+    a4: "Tu passes à travers 7 niveaux (F à S). Chaque niveau contient : Starter → Challenger → Leader → Ranker. Chaque étape franchie débloque des gains.",
+    q5: "Pourquoi seulement $2 pour commencer ?",
+    a5: "C’est pour rendre l’accès simple et ouvert à tous. Avec ce montant, tu accèdes au système, aux opportunités et aux formations.",
+    q6: "Est-ce que je reçois quelque chose en plus des gains ?",
+    a6: "Oui. Tu peux accéder à des formations utiles pour apprendre et évoluer en même temps.",
+    q7: "Est-ce que mon compte et mes gains sont sécurisés ?",
+    a7: "Oui. La plateforme est conçue avec un système sécurisé et un suivi clair de ton évolution.",
+    q8: "Est-ce que tout le monde peut rejoindre ?",
+    a8: "Oui. Ecrossflow est ouvert à toute personne prête à commencer et à évoluer.",
+    finalTitle: "Tu attends quoi ?",
+    finalDesc: "Le meilleur moment pour commencer c’est maintenant.",
+    finalLine1: "Rejoins Ecrossflow",
+    finalLine2: "Connecte-toi",
+    finalLine3: "Commence à construire ton flow",
+    finalCta: "Créer mon compte",
+  },
+  academy_content: {
+    badge: "Academie Ecrossflow",
+    title: "Programme en cours de preparation",
+    subtitle: "L'academie integree arrive bientot avec des parcours complets pour accelerer votre progression.",
+    ctaLabel: "Bientot disponible",
+    heroHint: "Reste connecte pour l'ouverture officielle",
+  },
+  payment_runtime_config: PAYMENT_RUNTIME_DEFAULTS,
 };
 
 let infraReady = false;

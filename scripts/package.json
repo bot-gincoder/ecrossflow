@@ -7,6 +7,7 @@
     "hello": "tsx ./src/hello.ts",
     "seed": "tsx ./src/seed.ts",
     "e2e:payments": "tsx ./src/e2e-payments.ts",
+    "e2e:site-audit": "tsx ./src/e2e-site-audit.ts",
     "reconcile:ledger": "tsx ./src/reconcile-ledger.ts",
     "circle:init-entity-secret": "tsx ./src/circle-init-entity-secret.ts",
     "circle:create-wallet-set": "tsx ./src/circle-create-wallet-set.ts",
